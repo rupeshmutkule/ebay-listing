@@ -1,10 +1,9 @@
 require('dotenv').config();
 const axios = require('axios');
-const db = require('../config/db');
 
 const BASE_URL = 'https://api.sandbox.ebay.com'; // switch to https://api.ebay.com for production
 const CATEGORY_ID = '177';
-const CONCURRENCY = 4; // how many products to process in parallel — keep low to avoid eBay rate limits
+const CONCURRENCY = 4;
 
 const headersA = {
   'Authorization': `Bearer ${process.env.SELLER_A_TOKEN}`,
@@ -18,7 +17,7 @@ const headersB = {
   'Content-Language': 'en-US'
 };
 
-// ---------- SMALL HELPER: run many async jobs with limited concurrency ----------
+// ---------- CONCURRENCY HELPER ----------
 async function runBatch(items, worker, concurrency = CONCURRENCY) {
   const results = [];
   let index = 0;
@@ -66,7 +65,7 @@ async function createMerchantLocation(headers) {
   } catch (err) {
     const msg = err.response?.data?.errors?.[0]?.message || '';
     if (err.response?.status === 409 || msg.includes('already exists')) {
-      // fine, already exists
+      // fine
     } else {
       throw err;
     }
@@ -193,9 +192,6 @@ const ASPECT_PLACEHOLDERS = {
   'Department': 'Unisex Adult'
 };
 
-// Builds a full aspects object for the given category: keeps any aspects the
-// caller already supplied, and fills in placeholder values for whatever else
-// eBay marks as required for that category (so publish doesn't fail on missing specifics).
 async function buildAspects(headers, categoryId, suppliedAspects = {}) {
   const requiredFields = await getRequiredAspects(categoryId, headers);
   const aspects = {
@@ -210,7 +206,7 @@ async function buildAspects(headers, categoryId, suppliedAspects = {}) {
   return aspects;
 }
 
-function buildOfferBody(sku, policies) {
+function buildOfferBody(sku, policies, price) {
   return {
     sku,
     marketplaceId: 'EBAY_US',
@@ -224,32 +220,32 @@ function buildOfferBody(sku, policies) {
       fulfillmentPolicyId: policies.fulfillmentPolicyId,
       returnPolicyId: policies.returnPolicyId
     },
-    pricingSummary: { price: { value: '19.99', currency: 'USD' } }
+    pricingSummary: { price: { value: String(price || '19.99'), currency: 'USD' } }
   };
 }
 
-async function createOffer(headers, sku, policies) {
+async function createOffer(headers, sku, policies, price) {
   const url = `${BASE_URL}/sell/inventory/v1/offer`;
-  const res = await axios.post(url, buildOfferBody(sku, policies), { headers });
+  const res = await axios.post(url, buildOfferBody(sku, policies, price), { headers });
   return res.data.offerId;
 }
 
-async function updateOffer(headers, offerId, sku, policies) {
+async function updateOffer(headers, offerId, sku, policies, price) {
   const url = `${BASE_URL}/sell/inventory/v1/offer/${offerId}`;
-  await axios.put(url, buildOfferBody(sku, policies), { headers });
+  await axios.put(url, buildOfferBody(sku, policies, price), { headers });
   return offerId;
 }
 
-async function getOrCreateOffer(headers, sku, policies) {
+async function getOrCreateOffer(headers, sku, policies, price) {
   const existing = await findExistingOffer(headers, sku);
   if (existing) {
     if (existing.status === 'PUBLISHED') {
       return { offerId: existing.offerId, alreadyPublished: true };
     }
-    await updateOffer(headers, existing.offerId, sku, policies);
+    await updateOffer(headers, existing.offerId, sku, policies, price);
     return { offerId: existing.offerId, alreadyPublished: false };
   }
-  const offerId = await createOffer(headers, sku, policies);
+  const offerId = await createOffer(headers, sku, policies, price);
   return { offerId, alreadyPublished: false };
 }
 
@@ -269,106 +265,25 @@ async function deleteInventoryItem(headers, sku) {
   await axios.delete(url, { headers });
 }
 
-async function ensureSeller(storeName, role) {
-  const [rows] = await db.query('SELECT id FROM sellers WHERE store_name = ?', [storeName]);
-  if (rows.length > 0) return rows[0].id;
-  const [result] = await db.query(
-    'INSERT INTO sellers (store_name, role, environment) VALUES (?, ?, ?)',
-    [storeName, role, 'sandbox']
-  );
-  return result.insertId;
-}
-
-// =====================================================================
-// BUTTON — CREATE / INSERT MULTIPLE PRODUCTS ON SELLER A (for testing bulk migration)
-// POST /api/seller-a/create-products
-// body: { products: [{ sku, title, description, price, quantity, imageUrl }, ...] }
-// Only "sku" and "title" are required per product — everything else has a sane default.
-// =====================================================================
-async function createOneProductOnSellerA(product, policiesA) {
-  const { sku, title, description, price, quantity, imageUrl } = product;
-  if (!sku || !title) throw new Error('Each product needs at least a sku and a title');
-
-  const aspects = await buildAspects(headersA, CATEGORY_ID);
-
-  const invUrl = `${BASE_URL}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`;
-  await axios.put(invUrl, {
-    availability: { shipToLocationAvailability: { quantity: quantity ?? 5 } },
-    condition: 'NEW',
-    product: {
-      title,
-      description: description || title,
-      imageUrls: imageUrl ? [imageUrl] : ['https://i.ebayimg.com/images/g/8xkAAOSwiddj6zZW/s-l1600.jpg'],
-      aspects
-    }
-  }, { headers: headersA });
-
-  const offerUrl = `${BASE_URL}/sell/inventory/v1/offer`;
-  const offerBody = {
-    sku,
-    marketplaceId: 'EBAY_US',
-    format: 'FIXED_PRICE',
-    availableQuantity: quantity ?? 5,
-    categoryId: CATEGORY_ID,
-    merchantLocationKey: 'WAREHOUSE1',
-    listingDescription: description || title,
-    listingPolicies: {
-      paymentPolicyId: policiesA.paymentPolicyId,
-      fulfillmentPolicyId: policiesA.fulfillmentPolicyId,
-      returnPolicyId: policiesA.returnPolicyId
-    },
-    pricingSummary: { price: { value: String(price ?? 19.99), currency: 'USD' } }
-  };
-
-  const { offerId, alreadyPublished } = await getOrCreateOffer(headersA, sku, policiesA);
-  const existing = await findExistingOffer(headersA, sku);
-  if (existing) {
-    await axios.put(`${offerUrl}/${existing.offerId}`, offerBody, { headers: headersA });
-  } else {
-    await axios.put(`${offerUrl}/${offerId}`, offerBody, { headers: headersA });
-  }
-
-  let listingId = null;
-  const currentOffer = await findExistingOffer(headersA, sku);
-  if (!currentOffer || currentOffer.status !== 'PUBLISHED') {
-    listingId = await publishOffer(headersA, offerId);
-  }
-
-  return { offerId, listingId };
-}
-
-exports.createProductsOnSellerA = async (req, res) => {
-  const products = req.body.products;
-  if (!Array.isArray(products) || products.length === 0) {
-    return res.status(400).json({ error: 'Provide products: [{sku, title, ...}] in the request body' });
-  }
+// Shared: withdraw + delete a SKU from Seller A after it's live on Seller B
+async function removeFromSellerA(sku) {
+  let removedFromA = false;
+  let removeError = null;
   try {
-    await createMerchantLocation(headersA);
-    const policiesA = await ensurePolicies(headersA); // fetched/created once for the whole batch
-
-    const results = await runBatch(
-      products.map(p => p.sku),
-      async (sku) => {
-        const product = products.find(p => p.sku === sku);
-        return createOneProductOnSellerA(product, policiesA);
-      }
-    );
-
-    res.json({
-      success: true,
-      total: results.length,
-      succeeded: results.filter(r => r.success).length,
-      failed: results.filter(r => !r.success).length,
-      results
-    });
+    const offerA = await findExistingOffer(headersA, sku);
+    if (offerA && offerA.status === 'PUBLISHED') {
+      await withdrawOffer(headersA, offerA.offerId);
+    }
+    await deleteInventoryItem(headersA, sku);
+    removedFromA = true;
   } catch (err) {
-    res.status(500).json({ error: err.response ? err.response.data : err.message });
+    removeError = err.response ? err.response.data : err.message;
   }
-};
+  return { removedFromA, removeError };
+}
 
-// =====================================================================
-// SHARED: list every inventory item currently live under a given account
-// =====================================================================
+// ---------- LIST INVENTORY (used by Fetch + View) ----------
+
 async function listInventory(headers) {
   const limit = 100;
   let offset = 0;
@@ -392,13 +307,13 @@ async function listInventory(headers) {
     });
 
     offset += limit;
-    if (batch.length === 0) break; // safety net
+    if (batch.length === 0) break;
   }
 
   return items;
 }
 
-// BUTTON 1 — LIST ALL PRODUCTS CURRENTLY LIVE ON SELLER A
+// ===================== BUTTON 1: FETCH PRODUCTS FROM SELLER A =====================
 // GET /api/seller-a/products
 exports.listSellerAProducts = async (req, res) => {
   try {
@@ -409,10 +324,8 @@ exports.listSellerAProducts = async (req, res) => {
   }
 };
 
-// DEBUG/CLEANUP — LIST ALL PRODUCTS CURRENTLY LIVE ON SELLER B
+// ===================== BUTTON 3: VIEW PRODUCTS LIVE ON SELLER B =====================
 // GET /api/seller-b/products
-// Use this to see leftover test listings on Seller B that are blocking new migrations
-// with eBay's "identical item, same seller" duplicate error.
 exports.listSellerBProducts = async (req, res) => {
   try {
     const items = await listInventory(headersB);
@@ -422,9 +335,82 @@ exports.listSellerBProducts = async (req, res) => {
   }
 };
 
-// DEBUG/CLEANUP — WITHDRAW + DELETE A SPECIFIC SKU FROM SELLER B
+// ===================== BUTTON 2: MIGRATE SELECTED SKUs A → B (no DB) =====================
+// POST /api/migrate   body: { skus: ["SKU1","SKU2", ...] }
+
+async function fetchCompleteProduct(headers, sku) {
+  const invUrl = `${BASE_URL}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`;
+  const invRes = await axios.get(invUrl, { headers });
+  const inventoryItem = invRes.data;
+
+  const offer = await findExistingOffer(headers, sku);
+  if (!offer) throw new Error(`No offer found on Seller A for SKU ${sku}`);
+
+  const offerUrl = `${BASE_URL}/sell/inventory/v1/offer/${offer.offerId}`;
+  const offerRes = await axios.get(offerUrl, { headers });
+
+  return { inventoryItem, offer: offerRes.data };
+}
+
+async function migrateOneProduct(sku, policiesB) {
+  const { inventoryItem, offer } = await fetchCompleteProduct(headersA, sku);
+  const product = inventoryItem.product;
+
+  const savedAspects = product.aspects || {};
+  const aspects = await buildAspects(headersB, CATEGORY_ID, savedAspects);
+  const price = offer.pricingSummary?.price?.value;
+  const quantity = inventoryItem.availability?.shipToLocationAvailability?.quantity || 1;
+
+  const invUrl = `${BASE_URL}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`;
+  await axios.put(invUrl, {
+    availability: { shipToLocationAvailability: { quantity } },
+    condition: inventoryItem.condition || 'NEW',
+    product: {
+      title: product.title,
+      description: product.description,
+      imageUrls: product.imageUrls?.length
+        ? product.imageUrls
+        : ['https://i.ebayimg.com/images/g/8xkAAOSwiddj6zZW/s-l1600.jpg'],
+      aspects
+    }
+  }, { headers: headersB });
+
+  const { offerId, alreadyPublished } = await getOrCreateOffer(headersB, sku, policiesB, price);
+  let listingId = null;
+  if (!alreadyPublished) {
+    listingId = await publishOffer(headersB, offerId);
+  }
+
+  const { removedFromA, removeError } = await removeFromSellerA(sku);
+
+  return { offerId, listingId, removedFromA, removeError };
+}
+
+exports.migrateProducts = async (req, res) => {
+  const skus = req.body.skus;
+  if (!Array.isArray(skus) || skus.length === 0) {
+    return res.status(400).json({ error: 'Provide skus: string[] in the request body' });
+  }
+  try {
+    await createMerchantLocation(headersB);
+    const policiesB = await ensurePolicies(headersB);
+
+    const results = await runBatch(skus, sku => migrateOneProduct(sku, policiesB));
+
+    res.json({
+      success: true,
+      total: results.length,
+      succeeded: results.filter(r => r.success).length,
+      failed: results.filter(r => !r.success).length,
+      results
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.response ? err.response.data : err.message });
+  }
+};
+
+// ===================== CLEANUP: remove a stuck SKU from Seller B =====================
 // POST /api/seller-b/delete   body: { sku: "SOME-SKU" }
-// Use this to remove a stale/duplicate test listing from Seller B before retrying a migration.
 exports.deleteFromSellerB = async (req, res) => {
   const { sku } = req.body;
   if (!sku) return res.status(400).json({ error: 'Provide sku in the request body' });
@@ -437,214 +423,5 @@ exports.deleteFromSellerB = async (req, res) => {
     res.json({ success: true, sku, message: 'Removed from Seller B' });
   } catch (err) {
     res.status(500).json({ error: err.response ? err.response.data : err.message });
-  }
-};
-
-// =====================================================================
-// BUTTON 2 — MOVE SELECTED SKUs FROM SELLER A INTO THE DATABASE (+ BACKUP)
-// POST /api/move-to-database   body: { skus: ["SKU1","SKU2", ...] }
-// =====================================================================
-async function fetchOneProductFromSellerA(sku, sellerAId) {
-  const invUrl = `${BASE_URL}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`;
-  const invRes = await axios.get(invUrl, { headers: headersA });
-  const inventoryItem = invRes.data;
-
-  const offer = await findExistingOffer(headersA, sku);
-  if (!offer) throw new Error(`No offer found on Seller A for SKU ${sku}`);
-
-  const offerUrl = `${BASE_URL}/sell/inventory/v1/offer/${offer.offerId}`;
-  const offerRes = await axios.get(offerUrl, { headers: headersA });
-  const offerDetails = offerRes.data;
-  const product = inventoryItem.product;
-
-  const [existingRows] = await db.query('SELECT id FROM products WHERE sku = ?', [sku]);
-  let productId;
-
-  if (existingRows.length > 0) {
-    productId = existingRows[0].id;
-    await db.query(
-      `UPDATE products SET title=?, description=?, price=?, quantity=?, condition_name=?,
-       category_id=?, status=?, aspects=?, raw_inventory_json=?, raw_offer_json=? WHERE id=?`,
-      [
-        product.title, product.description,
-        offerDetails.pricingSummary?.price?.value || 0,
-        inventoryItem.availability?.shipToLocationAvailability?.quantity || 0,
-        inventoryItem.condition, offerDetails.categoryId, 'fetched',
-        JSON.stringify(product.aspects || {}),
-        JSON.stringify(inventoryItem), JSON.stringify(offerDetails), productId
-      ]
-    );
-  } else {
-    const [result] = await db.query(
-      `INSERT INTO products (source_account_id, ebay_item_id, sku, title, description, price,
-       currency, quantity, condition_name, category_id, status, aspects, raw_inventory_json, raw_offer_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        sellerAId, offer.offerId, sku, product.title, product.description,
-        offerDetails.pricingSummary?.price?.value || 0,
-        offerDetails.pricingSummary?.price?.currency || 'USD',
-        inventoryItem.availability?.shipToLocationAvailability?.quantity || 0,
-        inventoryItem.condition, offerDetails.categoryId, 'fetched',
-        JSON.stringify(product.aspects || {}),
-        JSON.stringify(inventoryItem), JSON.stringify(offerDetails)
-      ]
-    );
-    productId = result.insertId;
-  }
-
-  await db.query('DELETE FROM product_images WHERE product_id = ?', [productId]);
-  const imageUrls = product.imageUrls || [];
-  for (let i = 0; i < imageUrls.length; i++) {
-    await db.query(
-      'INSERT INTO product_images (product_id, image_url, display_order) VALUES (?, ?, ?)',
-      [productId, imageUrls[i], i]
-    );
-  }
-
-  await db.query(
-    'INSERT INTO product_backups (product_id, sku, backup_json) VALUES (?, ?, ?)',
-    [productId, sku, JSON.stringify({ inventoryItem, offer: offerDetails })]
-  );
-  await db.query('UPDATE products SET status = ? WHERE id = ?', ['backed_up', productId]);
-
-  await db.query(
-    `INSERT INTO migration_log (product_id, sku, source_seller, status) VALUES (?, ?, ?, ?)`,
-    [productId, sku, 'seller_a_sandbox', 'backed_up']
-  );
-
-  return { productId };
-}
-
-exports.moveToDatabase = async (req, res) => {
-  const skus = req.body.skus;
-  if (!Array.isArray(skus) || skus.length === 0) {
-    return res.status(400).json({ error: 'Provide skus: string[] in the request body' });
-  }
-  try {
-    const sellerAId = await ensureSeller('seller_a_sandbox', 'source');
-    const results = await runBatch(skus, sku => fetchOneProductFromSellerA(sku, sellerAId));
-    res.json({
-      success: true,
-      total: results.length,
-      succeeded: results.filter(r => r.success).length,
-      failed: results.filter(r => !r.success).length,
-      results
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.response ? err.response.data : err.message });
-  }
-};
-
-// =====================================================================
-// BUTTON 3 — PUSH SELECTED SKUs FROM DATABASE TO SELLER B, THEN REMOVE FROM SELLER A
-// POST /api/migrate-to-seller-b   body: { skus: ["SKU1","SKU2", ...] }
-// =====================================================================
-async function migrateOneProductToSellerB(sku, sellerBId, policiesB) {
-  const [rows] = await db.query('SELECT * FROM products WHERE sku = ?', [sku]);
-  if (rows.length === 0) throw new Error(`SKU ${sku} not found in database — move it to the database first`);
-  const dbProduct = rows[0];
-
-  const [imageRows] = await db.query(
-    'SELECT image_url FROM product_images WHERE product_id = ? ORDER BY display_order',
-    [dbProduct.id]
-  );
-  const imageUrls = imageRows.map(r => r.image_url);
-  const aspects = JSON.parse(dbProduct.aspects || '{}');
-
-  // Create + publish on Seller B, using the SAME sku
-  const invUrl = `${BASE_URL}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`;
-  await axios.put(invUrl, {
-    availability: { shipToLocationAvailability: { quantity: dbProduct.quantity || 1 } },
-    condition: dbProduct.condition_name || 'NEW',
-    product: {
-      title: dbProduct.title,
-      description: dbProduct.description,
-      imageUrls: imageUrls.length ? imageUrls : undefined,
-      aspects
-    }
-  }, { headers: headersB });
-
-  const { offerId, alreadyPublished } = await getOrCreateOffer(headersB, sku, policiesB);
-  let listingId = null;
-  if (!alreadyPublished) {
-    listingId = await publishOffer(headersB, offerId);
-  }
-
-  await db.query(
-    `UPDATE migration_log SET target_seller=?, status=?, target_offer_id=?, target_listing_id=?
-     WHERE product_id = ? ORDER BY id DESC LIMIT 1`,
-    ['seller_b_sandbox', 'migrated', offerId, listingId, dbProduct.id]
-  );
-  await db.query('UPDATE products SET status = ? WHERE id = ?', ['migrated', dbProduct.id]);
-
-  // Remove the listing from Seller A now that it lives on Seller B
-  let removedFromA = false;
-  let removeError = null;
-  try {
-    const offerA = await findExistingOffer(headersA, sku);
-    if (offerA) {
-      if (offerA.status === 'PUBLISHED') {
-        await withdrawOffer(headersA, offerA.offerId);
-      }
-    }
-    await deleteInventoryItem(headersA, sku);
-    removedFromA = true;
-  } catch (err) {
-    removeError = err.response ? err.response.data : err.message;
-  }
-
-  return { offerId, listingId, removedFromA, removeError };
-}
-
-exports.migrateToSellerB = async (req, res) => {
-  const skus = req.body.skus;
-  if (!Array.isArray(skus) || skus.length === 0) {
-    return res.status(400).json({ error: 'Provide skus: string[] in the request body' });
-  }
-  try {
-    const sellerBId = await ensureSeller('seller_b_sandbox', 'destination');
-    await createMerchantLocation(headersB);
-    const policiesB = await ensurePolicies(headersB); // fetched/created once for the whole batch
-
-    const results = await runBatch(skus, sku => migrateOneProductToSellerB(sku, sellerBId, policiesB));
-
-    // Mark failures in migration_log
-    for (const r of results) {
-      if (!r.success) {
-        await db.query(
-          `UPDATE migration_log SET status=?, error_message=? WHERE sku = ? ORDER BY id DESC LIMIT 1`,
-          ['failed', JSON.stringify(r.error), r.sku]
-        ).catch(() => {});
-      }
-    }
-
-    res.json({
-      success: true,
-      total: results.length,
-      succeeded: results.filter(r => r.success).length,
-      failed: results.filter(r => !r.success).length,
-      results
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.response ? err.response.data : err.message });
-  }
-};
-
-// =====================================================================
-// BUTTON 4 (optional) — VIEW MIGRATION LOG / STATUS
-// GET /api/migration-status
-// =====================================================================
-exports.getMigrationStatus = async (req, res) => {
-  try {
-    const [rows] = await db.query(
-      `SELECT p.sku, p.title, p.status, ml.source_seller, ml.target_seller,
-              ml.target_offer_id, ml.target_listing_id, ml.error_message, ml.updated_at
-       FROM products p
-       LEFT JOIN migration_log ml ON ml.product_id = p.id
-       ORDER BY ml.updated_at DESC`
-    );
-    res.json({ success: true, rows });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
   }
 };
