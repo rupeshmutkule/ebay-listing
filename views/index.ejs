@@ -42,6 +42,20 @@
 
 <div id="tableWrap"></div>
 
+<hr style="margin: 24px 0;">
+<h2 style="font-size:16px;">Seller B cleanup (for stuck/duplicate test listings)</h2>
+<div class="toolbar">
+  <button id="btnListB" class="secondary">View products live on Seller B</button>
+</div>
+<div>
+  <label>Remove one SKU from Seller B (withdraw + delete):</label>
+  <div style="display:flex; gap:8px; margin-top:6px;">
+    <input id="deleteSkuInput" placeholder="SKU to remove from Seller B" style="flex:1; padding:8px;">
+    <button id="btnDeleteB" class="danger">Remove from Seller B</button>
+  </div>
+</div>
+<div id="tableWrapB"></div>
+
 <script>
 const statusBox = document.getElementById('statusBox');
 const tableWrap = document.getElementById('tableWrap');
@@ -154,6 +168,44 @@ document.getElementById('btnMigrate').onclick = async () => {
     });
   } catch (err) {
     log('Migration failed: ' + err.message, true);
+  }
+};
+
+// ---------- SELLER B CLEANUP: view what's live on Seller B ----------
+document.getElementById('btnListB').onclick = async () => {
+  log('Fetching products from Seller B...');
+  try {
+    const data = await callApi('/api/seller-b/products');
+    log(`Found ${data.count} products on Seller B`);
+    const rows = data.products.map(p => `
+      <tr>
+        <td>${p.image ? `<img class="thumb" src="${p.image}">` : ''}</td>
+        <td>${p.sku}</td><td>${p.title}</td><td>${p.quantity}</td><td>${p.condition}</td>
+      </tr>`).join('');
+    document.getElementById('tableWrapB').innerHTML = `
+      <table>
+        <thead><tr><th>Image</th><th>SKU</th><th>Title</th><th>Qty</th><th>Condition</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  } catch (err) {
+    log('Fetch failed: ' + err.message, true);
+  }
+};
+
+// ---------- SELLER B CLEANUP: remove one SKU ----------
+document.getElementById('btnDeleteB').onclick = async () => {
+  const sku = document.getElementById('deleteSkuInput').value.trim();
+  if (!sku) return log('Type a SKU to remove first.', true);
+  if (!confirm(`Withdraw and delete "${sku}" from Seller B?`)) return;
+  try {
+    await callApi('/api/seller-b/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sku })
+    });
+    log(`Removed ${sku} from Seller B`);
+  } catch (err) {
+    log('Remove failed: ' + err.message, true);
   }
 };
 

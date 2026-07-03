@@ -235,37 +235,74 @@ async function ensureSeller(storeName, role) {
 }
 
 // =====================================================================
+// SHARED: list every inventory item currently live under a given account
+// =====================================================================
+async function listInventory(headers) {
+  const limit = 100;
+  let offset = 0;
+  let total = Infinity;
+  const items = [];
+
+  while (offset < total) {
+    const url = `${BASE_URL}/sell/inventory/v1/inventory_item?limit=${limit}&offset=${offset}`;
+    const response = await axios.get(url, { headers });
+    total = response.data.total || 0;
+    const batch = response.data.inventoryItems || [];
+
+    batch.forEach(item => {
+      items.push({
+        sku: item.sku,
+        title: item.product?.title || '(no title)',
+        image: item.product?.imageUrls?.[0] || null,
+        quantity: item.availability?.shipToLocationAvailability?.quantity ?? 0,
+        condition: item.condition || ''
+      });
+    });
+
+    offset += limit;
+    if (batch.length === 0) break; // safety net
+  }
+
+  return items;
+}
+
 // BUTTON 1 — LIST ALL PRODUCTS CURRENTLY LIVE ON SELLER A
 // GET /api/seller-a/products
-// =====================================================================
 exports.listSellerAProducts = async (req, res) => {
   try {
-    const limit = 100;
-    let offset = 0;
-    let total = Infinity;
-    const items = [];
-
-    while (offset < total) {
-      const url = `${BASE_URL}/sell/inventory/v1/inventory_item?limit=${limit}&offset=${offset}`;
-      const response = await axios.get(url, { headers: headersA });
-      total = response.data.total || 0;
-      const batch = response.data.inventoryItems || [];
-
-      batch.forEach(item => {
-        items.push({
-          sku: item.sku,
-          title: item.product?.title || '(no title)',
-          image: item.product?.imageUrls?.[0] || null,
-          quantity: item.availability?.shipToLocationAvailability?.quantity ?? 0,
-          condition: item.condition || ''
-        });
-      });
-
-      offset += limit;
-      if (batch.length === 0) break; // safety net
-    }
-
+    const items = await listInventory(headersA);
     res.json({ success: true, count: items.length, products: items });
+  } catch (err) {
+    res.status(500).json({ error: err.response ? err.response.data : err.message });
+  }
+};
+
+// DEBUG/CLEANUP — LIST ALL PRODUCTS CURRENTLY LIVE ON SELLER B
+// GET /api/seller-b/products
+// Use this to see leftover test listings on Seller B that are blocking new migrations
+// with eBay's "identical item, same seller" duplicate error.
+exports.listSellerBProducts = async (req, res) => {
+  try {
+    const items = await listInventory(headersB);
+    res.json({ success: true, count: items.length, products: items });
+  } catch (err) {
+    res.status(500).json({ error: err.response ? err.response.data : err.message });
+  }
+};
+
+// DEBUG/CLEANUP — WITHDRAW + DELETE A SPECIFIC SKU FROM SELLER B
+// POST /api/seller-b/delete   body: { sku: "SOME-SKU" }
+// Use this to remove a stale/duplicate test listing from Seller B before retrying a migration.
+exports.deleteFromSellerB = async (req, res) => {
+  const { sku } = req.body;
+  if (!sku) return res.status(400).json({ error: 'Provide sku in the request body' });
+  try {
+    const offer = await findExistingOffer(headersB, sku);
+    if (offer && offer.status === 'PUBLISHED') {
+      await withdrawOffer(headersB, offer.offerId);
+    }
+    await deleteInventoryItem(headersB, sku);
+    res.json({ success: true, sku, message: 'Removed from Seller B' });
   } catch (err) {
     res.status(500).json({ error: err.response ? err.response.data : err.message });
   }
