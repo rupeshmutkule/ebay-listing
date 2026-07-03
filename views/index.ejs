@@ -26,6 +26,17 @@
 
 <h1><%= title %></h1>
 
+<h2 style="font-size:16px;">Create test products on Seller A</h2>
+<p style="font-size:13px; color:#555;">
+  One product per line: <code>sku, title, price, quantity, imageUrl</code> (price, quantity, imageUrl are optional)
+</p>
+<textarea id="bulkCreateInput" placeholder="SKU101, Wireless Mouse, 12.99, 10, https://example.com/mouse.jpg
+SKU102, USB-C Cable, 5.99, 50
+SKU103, Bluetooth Speaker"></textarea>
+<div class="toolbar">
+  <button id="btnCreateA">Create these products on Seller A</button>
+</div>
+
 <div class="toolbar">
   <button id="btnFetch">1. Fetch products from Seller A</button>
   <button id="btnBackup" class="secondary">2. Move selected to database</button>
@@ -90,6 +101,44 @@ async function callApi(url, options) {
   if (!res.ok) throw new Error(data.error ? JSON.stringify(data.error) : 'Request failed');
   return data;
 }
+
+// ---------- CREATE MULTIPLE TEST PRODUCTS ON SELLER A ----------
+function parseBulkCreateInput() {
+  return document.getElementById('bulkCreateInput').value
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => {
+      const [sku, title, price, quantity, imageUrl] = line.split(',').map(s => s.trim());
+      return {
+        sku,
+        title,
+        price: price ? Number(price) : undefined,
+        quantity: quantity ? Number(quantity) : undefined,
+        imageUrl: imageUrl || undefined
+      };
+    });
+}
+
+document.getElementById('btnCreateA').onclick = async () => {
+  const products = parseBulkCreateInput();
+  if (!products.length) return log('Add at least one product line first.', true);
+  log(`Creating ${products.length} product(s) on Seller A...`);
+  try {
+    const data = await callApi('/api/seller-a/create-products', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ products })
+    });
+    log(`Create done: ${data.succeeded} succeeded, ${data.failed} failed`);
+    data.results.forEach(r => {
+      if (r.success) log(`  ${r.sku}: created (offer ${r.offerId}${r.listingId ? ', listing ' + r.listingId : ''})`);
+      else log(`  ${r.sku}: FAILED — ${JSON.stringify(r.error)}`, true);
+    });
+  } catch (err) {
+    log('Create failed: ' + err.message, true);
+  }
+};
 
 // ---------- BUTTON 1: fetch & render products from Seller A ----------
 document.getElementById('btnFetch').onclick = async () => {

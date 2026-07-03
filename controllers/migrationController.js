@@ -165,6 +165,51 @@ async function findExistingOffer(headers, sku) {
   }
 }
 
+async function getRequiredAspects(categoryId, headers) {
+  const url = `${BASE_URL}/commerce/taxonomy/v1/category_tree/0/get_item_aspects_for_category?category_id=${categoryId}`;
+  try {
+    const res = await axios.get(url, { headers });
+    return res.data.aspects
+      .filter(a => a.aspectConstraint?.aspectRequired)
+      .map(a => a.localizedAspectName);
+  } catch (err) {
+    return [];
+  }
+}
+
+const ASPECT_PLACEHOLDERS = {
+  'Storage Capacity': '64 GB',
+  'Screen Size': '15.6 in',
+  'Model': 'Test Model',
+  'Network': 'Unlocked',
+  'Operating System': 'Android',
+  'Connectivity': 'Wi-Fi',
+  'Processor': 'Test Processor',
+  'RAM Size': '8 GB',
+  'Features': 'Test Feature',
+  'Material': 'Plastic',
+  'Style': 'Standard',
+  'Size': 'One Size',
+  'Department': 'Unisex Adult'
+};
+
+// Builds a full aspects object for the given category: keeps any aspects the
+// caller already supplied, and fills in placeholder values for whatever else
+// eBay marks as required for that category (so publish doesn't fail on missing specifics).
+async function buildAspects(headers, categoryId, suppliedAspects = {}) {
+  const requiredFields = await getRequiredAspects(categoryId, headers);
+  const aspects = {
+    Brand: ['TestBrand'],
+    Type: ['Test Type'],
+    MPN: ['Does Not Apply'],
+    ...suppliedAspects
+  };
+  requiredFields.forEach(field => {
+    if (!aspects[field]) aspects[field] = [ASPECT_PLACEHOLDERS[field] || 'N/A'];
+  });
+  return aspects;
+}
+
 function buildOfferBody(sku, policies) {
   return {
     sku,
@@ -233,6 +278,93 @@ async function ensureSeller(storeName, role) {
   );
   return result.insertId;
 }
+
+// =====================================================================
+// BUTTON — CREATE / INSERT MULTIPLE PRODUCTS ON SELLER A (for testing bulk migration)
+// POST /api/seller-a/create-products
+// body: { products: [{ sku, title, description, price, quantity, imageUrl }, ...] }
+// Only "sku" and "title" are required per product — everything else has a sane default.
+// =====================================================================
+async function createOneProductOnSellerA(product, policiesA) {
+  const { sku, title, description, price, quantity, imageUrl } = product;
+  if (!sku || !title) throw new Error('Each product needs at least a sku and a title');
+
+  const aspects = await buildAspects(headersA, CATEGORY_ID);
+
+  const invUrl = `${BASE_URL}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`;
+  await axios.put(invUrl, {
+    availability: { shipToLocationAvailability: { quantity: quantity ?? 5 } },
+    condition: 'NEW',
+    product: {
+      title,
+      description: description || title,
+      imageUrls: imageUrl ? [imageUrl] : ['https://i.ebayimg.com/images/g/8xkAAOSwiddj6zZW/s-l1600.jpg'],
+      aspects
+    }
+  }, { headers: headersA });
+
+  const offerUrl = `${BASE_URL}/sell/inventory/v1/offer`;
+  const offerBody = {
+    sku,
+    marketplaceId: 'EBAY_US',
+    format: 'FIXED_PRICE',
+    availableQuantity: quantity ?? 5,
+    categoryId: CATEGORY_ID,
+    merchantLocationKey: 'WAREHOUSE1',
+    listingDescription: description || title,
+    listingPolicies: {
+      paymentPolicyId: policiesA.paymentPolicyId,
+      fulfillmentPolicyId: policiesA.fulfillmentPolicyId,
+      returnPolicyId: policiesA.returnPolicyId
+    },
+    pricingSummary: { price: { value: String(price ?? 19.99), currency: 'USD' } }
+  };
+
+  const { offerId, alreadyPublished } = await getOrCreateOffer(headersA, sku, policiesA);
+  const existing = await findExistingOffer(headersA, sku);
+  if (existing) {
+    await axios.put(`${offerUrl}/${existing.offerId}`, offerBody, { headers: headersA });
+  } else {
+    await axios.put(`${offerUrl}/${offerId}`, offerBody, { headers: headersA });
+  }
+
+  let listingId = null;
+  const currentOffer = await findExistingOffer(headersA, sku);
+  if (!currentOffer || currentOffer.status !== 'PUBLISHED') {
+    listingId = await publishOffer(headersA, offerId);
+  }
+
+  return { offerId, listingId };
+}
+
+exports.createProductsOnSellerA = async (req, res) => {
+  const products = req.body.products;
+  if (!Array.isArray(products) || products.length === 0) {
+    return res.status(400).json({ error: 'Provide products: [{sku, title, ...}] in the request body' });
+  }
+  try {
+    await createMerchantLocation(headersA);
+    const policiesA = await ensurePolicies(headersA); // fetched/created once for the whole batch
+
+    const results = await runBatch(
+      products.map(p => p.sku),
+      async (sku) => {
+        const product = products.find(p => p.sku === sku);
+        return createOneProductOnSellerA(product, policiesA);
+      }
+    );
+
+    res.json({
+      success: true,
+      total: results.length,
+      succeeded: results.filter(r => r.success).length,
+      failed: results.filter(r => !r.success).length,
+      results
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.response ? err.response.data : err.message });
+  }
+};
 
 // =====================================================================
 // SHARED: list every inventory item currently live under a given account

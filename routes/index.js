@@ -7,6 +7,9 @@ router.get('/migration-tool', (req, res) => {
   res.render('index', { title: 'eBay Migration Tool — Seller A → Seller B' });
 });
 
+// Create multiple test products on Seller A in one go
+router.post('/api/seller-a/create-products', migrationController.createProductsOnSellerA);
+
 // Button 1: list every product currently live on Seller A
 router.get('/api/seller-a/products', migrationController.listSellerAProducts);
 
