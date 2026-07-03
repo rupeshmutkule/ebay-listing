@@ -1,11 +1,181 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title><%= title %></title>
-  </head>
-  <body>
-    <h1><%= title %></h1>
-    <p>Welcome to your Express app.</p>
-  </body>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title><%= title %></title>
+<style>
+  body { font-family: Arial, sans-serif; margin: 24px; background: #f7f7f8; color: #222; }
+  h1 { font-size: 20px; }
+  .toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin: 16px 0; }
+  button { padding: 10px 16px; border: none; border-radius: 6px; background: #0654ba; color: #fff; cursor: pointer; font-size: 14px; }
+  button:hover { background: #054098; }
+  button:disabled { background: #999; cursor: not-allowed; }
+  button.secondary { background: #444; }
+  .danger { background: #b00020; }
+  textarea { width: 100%; height: 60px; margin: 8px 0; font-family: monospace; }
+  table { border-collapse: collapse; width: 100%; background: #fff; margin-top: 10px; }
+  th, td { border: 1px solid #ddd; padding: 6px 8px; font-size: 13px; text-align: left; }
+  th { background: #eee; }
+  img.thumb { width: 40px; height: 40px; object-fit: cover; }
+  .status { font-size: 13px; margin: 8px 0; white-space: pre-wrap; }
+  .ok { color: green; } .bad { color: #b00020; }
+  .count { font-weight: bold; }
+</style>
+</head>
+<body>
+
+<h1><%= title %></h1>
+
+<div class="toolbar">
+  <button id="btnFetch">1. Fetch products from Seller A</button>
+  <button id="btnBackup" class="secondary">2. Move selected to database</button>
+  <button id="btnMigrate" class="danger">3. Migrate selected to Seller B (removes from A)</button>
+  <button id="btnStatus" class="secondary">4. View migration status</button>
+</div>
+
+<div>
+  <label>Or paste specific SKUs (comma or newline separated) instead of using checkboxes:</label>
+  <textarea id="manualSkus" placeholder="SKU001, SKU002, SKU003"></textarea>
+</div>
+
+<div class="status" id="statusBox"></div>
+
+<div id="tableWrap"></div>
+
+<script>
+const statusBox = document.getElementById('statusBox');
+const tableWrap = document.getElementById('tableWrap');
+const manualSkusBox = document.getElementById('manualSkus');
+
+function log(msg, isError) {
+  const line = document.createElement('div');
+  line.textContent = msg;
+  line.className = isError ? 'bad' : 'ok';
+  statusBox.prepend(line);
+}
+
+function getManualSkus() {
+  return manualSkusBox.value
+    .split(/[\n,]/)
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function getCheckedSkus() {
+  return Array.from(document.querySelectorAll('.row-check:checked')).map(cb => cb.dataset.sku);
+}
+
+function getSelectedSkus() {
+  const manual = getManualSkus();
+  return manual.length ? manual : getCheckedSkus();
+}
+
+async function callApi(url, options) {
+  const res = await fetch(url, options);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ? JSON.stringify(data.error) : 'Request failed');
+  return data;
+}
+
+// ---------- BUTTON 1: fetch & render products from Seller A ----------
+document.getElementById('btnFetch').onclick = async () => {
+  log('Fetching products from Seller A...');
+  try {
+    const data = await callApi('/api/seller-a/products');
+    log(`Found ${data.count} products on Seller A`);
+    renderTable(data.products);
+  } catch (err) {
+    log('Fetch failed: ' + err.message, true);
+  }
+};
+
+function renderTable(products) {
+  const rows = products.map(p => `
+    <tr>
+      <td><input type="checkbox" class="row-check" data-sku="${p.sku}"></td>
+      <td>${p.image ? `<img class="thumb" src="${p.image}">` : ''}</td>
+      <td>${p.sku}</td>
+      <td>${p.title}</td>
+      <td>${p.quantity}</td>
+      <td>${p.condition}</td>
+    </tr>
+  `).join('');
+
+  tableWrap.innerHTML = `
+    <p><label><input type="checkbox" id="checkAll"> select all (${products.length})</label></p>
+    <table>
+      <thead><tr><th></th><th>Image</th><th>SKU</th><th>Title</th><th>Qty</th><th>Condition</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+
+  document.getElementById('checkAll').onchange = (e) => {
+    document.querySelectorAll('.row-check').forEach(cb => cb.checked = e.target.checked);
+  };
+}
+
+// ---------- BUTTON 2: move selected SKUs to the database (backup) ----------
+document.getElementById('btnBackup').onclick = async () => {
+  const skus = getSelectedSkus();
+  if (!skus.length) return log('Select products (or paste SKUs) first.', true);
+  log(`Backing up ${skus.length} product(s) to the database...`);
+  try {
+    const data = await callApi('/api/move-to-database', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ skus })
+    });
+    log(`Backup done: ${data.succeeded} succeeded, ${data.failed} failed`);
+    data.results.filter(r => !r.success).forEach(r => log(`  ${r.sku}: ${JSON.stringify(r.error)}`, true));
+  } catch (err) {
+    log('Backup failed: ' + err.message, true);
+  }
+};
+
+// ---------- BUTTON 3: migrate selected SKUs to Seller B, then delete from Seller A ----------
+document.getElementById('btnMigrate').onclick = async () => {
+  const skus = getSelectedSkus();
+  if (!skus.length) return log('Select products (or paste SKUs) first.', true);
+  if (!confirm(`Migrate ${skus.length} product(s) to Seller B and remove them from Seller A?`)) return;
+  log(`Migrating ${skus.length} product(s) to Seller B...`);
+  try {
+    const data = await callApi('/api/migrate-to-seller-b', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ skus })
+    });
+    log(`Migration done: ${data.succeeded} succeeded, ${data.failed} failed`);
+    data.results.forEach(r => {
+      if (r.success) {
+        log(`  ${r.sku}: live on B (listing ${r.listingId || r.offerId}), removed from A: ${r.removedFromA}`);
+      } else {
+        log(`  ${r.sku}: FAILED — ${JSON.stringify(r.error)}`, true);
+      }
+    });
+  } catch (err) {
+    log('Migration failed: ' + err.message, true);
+  }
+};
+
+// ---------- BUTTON 4: view status log ----------
+document.getElementById('btnStatus').onclick = async () => {
+  try {
+    const data = await callApi('/api/migration-status');
+    const rows = data.rows.map(r => `
+      <tr>
+        <td>${r.sku}</td><td>${r.title || ''}</td><td>${r.status}</td>
+        <td>${r.target_offer_id || ''}</td><td>${r.target_listing_id || ''}</td>
+        <td>${r.error_message || ''}</td>
+      </tr>`).join('');
+    tableWrap.innerHTML = `
+      <table>
+        <thead><tr><th>SKU</th><th>Title</th><th>Status</th><th>Offer ID (B)</th><th>Listing ID (B)</th><th>Error</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  } catch (err) {
+    log('Status fetch failed: ' + err.message, true);
+  }
+};
+</script>
+</body>
 </html>
