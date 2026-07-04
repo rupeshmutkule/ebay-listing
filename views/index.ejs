@@ -16,58 +16,56 @@
   th, td { border: 1px solid #ddd; padding: 6px 8px; font-size: 13px; text-align: left; }
   th { background: #eee; }
   img.thumb { width: 40px; height: 40px; object-fit: cover; }
-  .status { font-size: 13px; margin: 8px 0; white-space: pre-wrap; }
-  .ok { color: green; } .bad { color: #b00020; }
+  .status { font-size: 13px; margin: 8px 0; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
+  .ok { color: green; } .bad { color: #b00020; } .warn { color: #a06a00; }
 </style>
 </head>
 <body>
-
 <h1><%= title %></h1>
+<p style="font-size:13px;color:#555;">
+  Identifiers below are <strong>eBay Item Numbers</strong>. Migration verifies the new listing
+  is live on Seller B before removing it from Seller A. Progress is saved to a checkpoint file,
+  so re-running the same list skips items already completed.
+</p>
 
 <div class="toolbar">
   <button id="btnFetch">1. Fetch products from Seller A</button>
   <button id="btnMigrate" class="danger">2. Migrate selected to Seller B (removes from A)</button>
   <button id="btnViewB" class="secondary">3. View products live on Seller B</button>
+  <button id="btnStatus" class="secondary">Check migration progress</button>
 </div>
 
 <div>
-  <label>Or paste specific SKUs (comma or newline separated) instead of using checkboxes:</label>
-  <textarea id="manualSkus" placeholder="SKU001, SKU002, SKU003"></textarea>
+  <label>Or paste specific Item Numbers (comma or newline separated) instead of using checkboxes:</label>
+  <textarea id="manualIds" placeholder="123456789012, 123456789013"></textarea>
 </div>
 
 <div class="status" id="statusBox"></div>
 <div id="tableWrap"></div>
 
-<hr style="margin: 24px 0;">
-<h2 style="font-size:16px;">Seller B cleanup (for stuck/duplicate test listings)</h2>
-<div style="display:flex; gap:8px; margin-top:6px;">
-  <input id="deleteSkuInput" placeholder="SKU to remove from Seller B" style="flex:1; padding:8px;">
-  <button id="btnDeleteB" class="danger">Remove from Seller B</button>
-</div>
-
 <script>
 const statusBox = document.getElementById('statusBox');
 const tableWrap = document.getElementById('tableWrap');
-const manualSkusBox = document.getElementById('manualSkus');
+const manualIdsBox = document.getElementById('manualIds');
 
-function log(msg, isError) {
+function log(msg, cls) {
   const line = document.createElement('div');
   line.textContent = msg;
-  line.className = isError ? 'bad' : 'ok';
+  line.className = cls || 'ok';
   statusBox.prepend(line);
 }
 
-function getManualSkus() {
-  return manualSkusBox.value.split(/[\n,]/).map(s => s.trim()).filter(Boolean);
+function getManualIds() {
+  return manualIdsBox.value.split(/[\n,]/).map(s => s.trim()).filter(Boolean);
 }
 
-function getCheckedSkus() {
-  return Array.from(document.querySelectorAll('.row-check:checked')).map(cb => cb.dataset.sku);
+function getCheckedIds() {
+  return Array.from(document.querySelectorAll('.row-check:checked')).map(cb => cb.dataset.itemid);
 }
 
-function getSelectedSkus() {
-  const manual = getManualSkus();
-  return manual.length ? manual : getCheckedSkus();
+function getSelectedIds() {
+  const manual = getManualIds();
+  return manual.length ? manual : getCheckedIds();
 }
 
 async function callApi(url, options) {
@@ -80,92 +78,76 @@ async function callApi(url, options) {
 function renderTable(products) {
   const rows = products.map(p => `
     <tr>
-      <td><input type="checkbox" class="row-check" data-sku="${p.sku}"></td>
+      <td><input type="checkbox" class="row-check" data-itemid="${p.itemId}"></td>
       <td>${p.image ? `<img class="thumb" src="${p.image}">` : ''}</td>
-      <td>${p.sku}</td>
+      <td>${p.itemId}</td>
+      <td>${p.sku || ''}</td>
       <td>${p.title}</td>
       <td>${p.quantity}</td>
-      <td>${p.condition}</td>
+      <td>${p.status || ''}</td>
     </tr>
   `).join('');
-
   tableWrap.innerHTML = `
     <p><label><input type="checkbox" id="checkAll"> select all (${products.length})</label></p>
     <table>
-      <thead><tr><th></th><th>Image</th><th>SKU</th><th>Title</th><th>Qty</th><th>Condition</th></tr></thead>
+      <thead><tr><th></th><th>Image</th><th>Item Number</th><th>SKU</th><th>Title</th><th>Qty</th><th>Status</th></tr></thead>
       <tbody>${rows}</tbody>
-    </table>
-  `;
-
+    </table>`;
   document.getElementById('checkAll').onchange = (e) => {
     document.querySelectorAll('.row-check').forEach(cb => cb.checked = e.target.checked);
   };
 }
 
-// ---------- BUTTON 1: Fetch from Seller A ----------
 document.getElementById('btnFetch').onclick = async () => {
   log('Fetching products from Seller A...');
   try {
     const data = await callApi('/api/seller-a/products');
     log(`Found ${data.count} products on Seller A`);
     renderTable(data.products);
-  } catch (err) {
-    log('Fetch failed: ' + err.message, true);
-  }
+  } catch (err) { log('Fetch failed: ' + err.message, 'bad'); }
 };
 
-// ---------- BUTTON 2: Migrate selected to Seller B ----------
 document.getElementById('btnMigrate').onclick = async () => {
-  const skus = getSelectedSkus();
-  if (!skus.length) return log('Select products (or paste SKUs) first.', true);
-  if (!confirm(`Migrate ${skus.length} product(s) to Seller B and remove them from Seller A?`)) return;
-  log(`Migrating ${skus.length} product(s) to Seller B...`);
+  const itemIds = getSelectedIds();
+  if (!itemIds.length) return log('Select products (or paste Item Numbers) first.', 'bad');
+  if (!confirm(`Migrate ${itemIds.length} product(s) to Seller B and remove them from Seller A?`)) return;
+  log(`Migrating ${itemIds.length} product(s) to Seller B... this can take a while for large batches.`);
   try {
     const data = await callApi('/api/migrate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ skus })
+      body: JSON.stringify({ itemIds })
     });
     log(`Migration done: ${data.succeeded} succeeded, ${data.failed} failed`);
     data.results.forEach(r => {
       if (r.success) {
-        log(`  ${r.sku}: live on B (listing ${r.listingId || r.offerId}), removed from A: ${r.removedFromA}`);
+        log(`  ${r.itemId}: now live on B as ${r.newItemIdOnB}, removed from A`, 'ok');
       } else {
-        log(`  ${r.sku}: FAILED — ${JSON.stringify(r.error)}`, true);
+        log(`  ${r.itemId}: FAILED — ${r.error}`, 'bad');
       }
     });
-  } catch (err) {
-    log('Migration failed: ' + err.message, true);
-  }
+  } catch (err) { log('Migration failed: ' + err.message, 'bad'); }
 };
 
-// ---------- BUTTON 3: View products live on Seller B ----------
 document.getElementById('btnViewB').onclick = async () => {
   log('Fetching products from Seller B...');
   try {
     const data = await callApi('/api/seller-b/products');
     log(`Found ${data.count} products on Seller B`);
     renderTable(data.products);
-  } catch (err) {
-    log('Fetch failed: ' + err.message, true);
-  }
+  } catch (err) { log('Fetch failed: ' + err.message, 'bad'); }
 };
 
-// ---------- Cleanup: remove one SKU from Seller B ----------
-document.getElementById('btnDeleteB').onclick = async () => {
-  const sku = document.getElementById('deleteSkuInput').value.trim();
-  if (!sku) return log('Type a SKU to remove first.', true);
-  if (!confirm(`Withdraw and delete "${sku}" from Seller B?`)) return;
+document.getElementById('btnStatus').onclick = async () => {
   try {
-    await callApi('/api/seller-b/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sku })
+    const data = await callApi('/api/migration-status');
+    const entries = Object.entries(data.checkpoint);
+    log(`Checkpoint has ${entries.length} tracked item(s)`);
+    entries.forEach(([itemId, info]) => {
+      const cls = info.status === 'removed_from_a' ? 'ok' : info.status === 'failed' ? 'bad' : 'warn';
+      log(`  ${itemId}: ${info.status}${info.newItemIdOnB ? ' -> ' + info.newItemIdOnB : ''}`, cls);
     });
-    log(`Removed ${sku} from Seller B`);
-  } catch (err) {
-    log('Remove failed: ' + err.message, true);
-  }
+  } catch (err) { log('Status check failed: ' + err.message, 'bad'); }
 };
 </script>
 </body>
