@@ -3,7 +3,7 @@ const router = express.Router();
 const migrationController = require('../controllers/migrationController');
 const requireApiKey = require('../middleware/requireApiKey');
 
-router.get('/ebay-store-migration', (req, res) => {
+router.get('/', (req, res) => {
   res.render('index', {
     title: 'eBay Migration Tool - Seller A -> Seller B (Production)',
     apiKey: process.env.MIGRATION_TOOL_API_KEY || process.env.API_KEY || process.env.SHARED_SECRET || ''
