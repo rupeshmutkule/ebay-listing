@@ -19,7 +19,7 @@ function getConfiguredSellerBPolicies() {
 
   if (hasAny && !hasAll) {
     throw new Error(
-      'Set all three Seller B policy IDs together: ' +
+      'Set all three Semi Equipment policy IDs together: ' +
       'SELLER_B_PAYMENT_POLICY_ID, SELLER_B_FULFILLMENT_POLICY_ID, and SELLER_B_RETURN_POLICY_ID.'
     );
   }
@@ -39,18 +39,18 @@ function getConfiguredSellerBPolicies() {
 async function resolveSellerBPolicies(tokenB) {
   const configured = getConfiguredSellerBPolicies();
   if (configured) {
-    console.log('[migration] Using Seller B policy IDs from environment variables.');
+    console.log('[migration] Using Semi Equipment policy IDs from environment variables.');
     return configured;
   }
 
-  console.log('[migration] Seller B policy IDs not set in env; fetching from eBay Account API.');
+  console.log('[migration] Semi Equipment policy IDs not set in env; fetching from eBay Account API.');
   try {
     return await getSellerPolicies(tokenB);
   } catch (err) {
     const status = err.response?.status;
     if (status === 403) {
       console.warn(
-        '[migration] Seller B policy lookup returned 403; falling back to legacy Trading API fields ' +
+        '[migration] Semi Equipment policy lookup returned 403; falling back to legacy Trading API fields ' +
         'cloned from the source listing.'
       );
       return null;
@@ -179,12 +179,12 @@ async function migrateOneItem(itemId, policiesB) {
     if (!newItemIdOnB) {
       const sourceItem = await tradingApi.getItem(itemId, tokenA);
       if (!sourceItem) {
-        throw new Error(`Item ${itemId} not found on Seller A (already removed or invalid ID)`);
+        throw new Error(`Item ${itemId} not found on Bridge Tronic Global (already removed or invalid ID)`);
       }
 
       const listingStatus = sourceItem.SellingStatus?.ListingStatus;
       if (listingStatus && listingStatus !== 'Active') {
-        throw new Error(`Item ${itemId} is not Active on Seller A (status: ${listingStatus}) - skipping`);
+        throw new Error(`Item ${itemId} is not Active on Bridge Tronic Global (status: ${listingStatus}) - skipping`);
       }
 
       const created = await tradingApi.addFixedPriceItem(sourceItem, policiesB, tokenB);
@@ -197,8 +197,8 @@ async function migrateOneItem(itemId, policiesB) {
     const isActive = liveCheck?.SellingStatus?.ListingStatus === 'Active';
     if (!isActive) {
       throw new Error(
-        `New listing ${newItemIdOnB} on Seller B is not confirmed Active yet ` +
-        `(status: ${liveCheck?.SellingStatus?.ListingStatus}) - not removing from Seller A. Retry later.`
+        `New listing ${newItemIdOnB} on Semi Equipment is not confirmed Active yet ` +
+        `(status: ${liveCheck?.SellingStatus?.ListingStatus}) - not removing from Bridge Tronic Global. Retry later.`
       );
     }
 

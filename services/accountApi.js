@@ -27,8 +27,8 @@ async function getSellerPolicies(oauthToken, marketplaceId = 'EBAY_US') {
 
   if (!paymentPolicies.length || !fulfillmentPolicies.length || !returnPolicies.length) {
     throw new Error(
-      'Seller B has no business policies configured for this marketplace. ' +
-      'Set up Payment/Shipping/Return policies in Seller B\'s eBay account (or via the Account API) before migrating.'
+      'Semi Equipment has no business policies configured for this marketplace. ' +
+      'Set up Payment/Shipping/Return policies in Semi Equipment\'s eBay account (or via the Account API) before migrating.'
     );
   }
 

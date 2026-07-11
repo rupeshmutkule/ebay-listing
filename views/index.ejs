@@ -7,7 +7,7 @@
 <style>
   :root {
     color-scheme: light;
-    --bg: #f4f1ea;
+    --bg: #5B5CEB;
     --panel: #ffffff;
     --panel-2: #fbfaf7;
     --text: #1d1d1f;
@@ -24,15 +24,15 @@
   body {
     margin: 0;
     font-family: Arial, Helvetica, sans-serif;
-    background:
-      radial-gradient(circle at top left, rgba(15, 91, 215, 0.12), transparent 28%),
+    background: #F6F1E8;
+      /* radial-gradient(circle at top left, rgba(15, 91, 215, 0.12), transparent 28%),
       radial-gradient(circle at top right, rgba(166, 27, 27, 0.08), transparent 24%),
-      linear-gradient(180deg, #f8f5ef 0%, var(--bg) 100%);
+      linear-gradient(180deg, #f8f5ef 0%, var(--bg) 100%); */
     color: var(--text);
   }
 
   .shell {
-    max-width: 1200px;
+    max-width: 1500px;
     margin: 0 auto;
     padding: 32px 20px 40px;
   }
@@ -47,7 +47,7 @@
   }
 
   h1 {
-    margin: 0 0 10px;
+    margin: 0 0 0px;
     font-size: clamp(24px, 3vw, 36px);
     letter-spacing: -0.03em;
   }
@@ -202,18 +202,18 @@
 <div class="shell">
   <section class="hero">
     <h1><%= title %></h1>
-    <p class="lede">
-      Paste eBay Item Numbers or select products from Seller A, then migrate them to Seller B.
+    <!-- <p class="lede">
+      Paste eBay Item Numbers or select products from Bridge Tronic Global, then migrate them to Semi Equipment.
       The server now runs each migration as a background job, polls progress by job ID, and stops
       duplicate submissions for the same batch while a run is active.
-    </p>
+    </p> -->
   </section>
 
   <section class="panel">
     <div class="toolbar">
-      <button id="btnFetch">1. Fetch products from Seller A</button>
-      <button id="btnMigrate" class="danger">2. Migrate selected to Seller B</button>
-      <button id="btnViewB" class="secondary">3. View products live on Seller B</button>
+      <button id="btnFetch">1. Fetch products from Bridge Tronic Global</button>
+      <button id="btnMigrate" class="danger">2. Migrate selected to Semi Equipment</button>
+      <button id="btnViewB" class="secondary">3. View products live on Semi Equipment</button>
       <button id="btnStatus" class="secondary">Check migration progress</button>
     </div>
 
@@ -380,7 +380,7 @@ async function pollJob(jobId) {
           log(
             result.skipped
               ? `  ${result.itemId}: skipped - already completed in a previous run`
-              : `  ${result.itemId}: now live on B as ${result.newItemIdOnB}, removed from A`,
+              : `  ${result.itemId}: now live on Semi Equipment as ${result.newItemIdOnB}, removed from Bridge Tronic Global`,
             'ok'
           );
         } else {
@@ -404,10 +404,10 @@ async function pollJob(jobId) {
 }
 
 document.getElementById('btnFetch').onclick = async () => {
-  log('Fetching products from Seller A...');
+  log('Fetching products from Bridge Tronic Global...');
   try {
     const data = await callApi('/api/seller-a/products');
-    log(`Found ${data.count} products on Seller A`, 'ok');
+    log(`Found ${data.count} products on Bridge Tronic Global`, 'ok');
     renderTable(data.products);
   } catch (err) {
     log(`Fetch failed: ${err.message}`, 'bad');
@@ -420,7 +420,7 @@ btnMigrate.onclick = async () => {
     return log('Select products or paste Item Numbers first.', 'bad');
   }
 
-  if (!confirm(`Migrate ${itemIds.length} product(s) to Seller B and remove them from Seller A?`)) {
+  if (!confirm(`Migrate ${itemIds.length} product(s) to Semi Equipment and remove them from Bridge Tronic Global?`)) {
     return;
   }
 
@@ -450,10 +450,10 @@ btnMigrate.onclick = async () => {
 };
 
 document.getElementById('btnViewB').onclick = async () => {
-  log('Fetching products from Seller B...');
+  log('Fetching products from Semi Equipment...');
   try {
     const data = await callApi('/api/seller-b/products');
-    log(`Found ${data.count} products on Seller B`, 'ok');
+    log(`Found ${data.count} products on Semi Equipment`, 'ok');
     renderTable(data.products);
   } catch (err) {
     log(`Fetch failed: ${err.message}`, 'bad');
