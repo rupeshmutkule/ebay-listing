@@ -89,24 +89,23 @@ async function getItem(itemId, oauthToken) {
 
 // ---------- GetSellerList: list active items for Seller A (for the "fetch" button) ----------
 async function getSellerList(oauthToken, { pageNumber = 1, entriesPerPage = 200 } = {}) {
-  const now = new Date();
-  const from = new Date(now.getTime() - 1000 * 60 * 60 * 24 * 119); // Trading API max 120-day window
   const body = `
-  <StartTimeFrom>${from.toISOString()}</StartTimeFrom>
-  <StartTimeTo>${now.toISOString()}</StartTimeTo>
-  <GranularityLevel>Fine</GranularityLevel>
-  <Pagination>
-    <EntriesPerPage>${entriesPerPage}</EntriesPerPage>
-    <PageNumber>${pageNumber}</PageNumber>
-  </Pagination>`;
-  const root = await callTradingApi('GetSellerList', body, oauthToken);
-  const items = root.ItemArray?.Item
-    ? (Array.isArray(root.ItemArray.Item) ? root.ItemArray.Item : [root.ItemArray.Item])
+  <ActiveList>
+    <Include>true</Include>
+    <Pagination>
+      <EntriesPerPage>${entriesPerPage}</EntriesPerPage>
+      <PageNumber>${pageNumber}</PageNumber>
+    </Pagination>
+  </ActiveList>
+  <DetailLevel>ReturnAll</DetailLevel>`;
+  const root = await callTradingApi('GetMyeBaySelling', body, oauthToken);
+  const items = root.ActiveList?.ItemArray?.Item
+    ? (Array.isArray(root.ActiveList.ItemArray.Item) ? root.ActiveList.ItemArray.Item : [root.ActiveList.ItemArray.Item])
     : [];
   return {
     items,
-    totalPages: Number(root.PaginationResult?.TotalNumberOfPages || 1),
-    totalEntries: Number(root.PaginationResult?.TotalNumberOfEntries || items.length)
+    totalPages: Number(root.ActiveList?.PaginationResult?.TotalNumberOfPages || 1),
+    totalEntries: Number(root.ActiveList?.PaginationResult?.TotalNumberOfEntries || items.length)
   };
 }
 
