@@ -10,4 +10,4 @@ app.set('views', path.join(__dirname, 'views'));
 app.use('/', require('./routes/migration'));
 
 const PORT = process.env.PORT || 3002;
-app.listen(PORT, () => console.log(`Migration tool running at http://localhost:${PORT}/migration-tool`));
+app.listen(PORT, () => console.log(`Migration tool running at http://localhost:${PORT}/ebay-store-migration`));
