@@ -8,6 +8,57 @@ const activeBatchKeys = new Map();
 
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+function getConfiguredSellerBPolicies() {
+  const paymentPolicyId = process.env.SELLER_B_PAYMENT_POLICY_ID?.trim();
+  const fulfillmentPolicyId = process.env.SELLER_B_FULFILLMENT_POLICY_ID?.trim();
+  const returnPolicyId = process.env.SELLER_B_RETURN_POLICY_ID?.trim();
+
+  const values = [paymentPolicyId, fulfillmentPolicyId, returnPolicyId];
+  const hasAny = values.some(Boolean);
+  const hasAll = values.every(Boolean);
+
+  if (hasAny && !hasAll) {
+    throw new Error(
+      'Set all three Seller B policy IDs together: ' +
+      'SELLER_B_PAYMENT_POLICY_ID, SELLER_B_FULFILLMENT_POLICY_ID, and SELLER_B_RETURN_POLICY_ID.'
+    );
+  }
+
+  if (!hasAll) {
+    return null;
+  }
+
+  return {
+    paymentPolicyId,
+    fulfillmentPolicyId,
+    returnPolicyId,
+    source: 'env'
+  };
+}
+
+async function resolveSellerBPolicies(tokenB) {
+  const configured = getConfiguredSellerBPolicies();
+  if (configured) {
+    console.log('[migration] Using Seller B policy IDs from environment variables.');
+    return configured;
+  }
+
+  console.log('[migration] Seller B policy IDs not set in env; fetching from eBay Account API.');
+  try {
+    return await getSellerPolicies(tokenB);
+  } catch (err) {
+    const status = err.response?.status;
+    if (status === 403) {
+      console.warn(
+        '[migration] Seller B policy lookup returned 403; falling back to legacy Trading API fields ' +
+        'cloned from the source listing.'
+      );
+      return null;
+    }
+    throw err;
+  }
+}
+
 function normalizeItemIds(itemIds) {
   const seen = new Set();
   const result = [];
@@ -169,7 +220,7 @@ async function migrateOneItem(itemId, policiesB) {
 async function migrateItems(itemIds) {
   const normalized = normalizeItemIds(itemIds);
   const tokenB = await sellerB.getToken();
-  const policiesB = await getSellerPolicies(tokenB);
+  const policiesB = await resolveSellerBPolicies(tokenB);
 
   const results = await runMigrationBatch(normalized, policiesB);
 
@@ -237,7 +288,7 @@ async function runMigrationJob(jobId) {
 
   try {
     const tokenB = await sellerB.getToken();
-    const policiesB = await getSellerPolicies(tokenB);
+    const policiesB = await resolveSellerBPolicies(tokenB);
 
     await runMigrationBatch(job.itemIds, policiesB, (entry, progress) => {
       updateJob(jobId, {

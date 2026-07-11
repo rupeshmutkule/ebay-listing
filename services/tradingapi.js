@@ -1,11 +1,16 @@
 const axios = require('axios');
-const { XMLParser } = require('fast-xml-parser');
+const { XMLParser, XMLBuilder } = require('fast-xml-parser');
 
 const TRADING_API_URL = 'https://api.ebay.com/ws/api.dll';
 const SITE_ID = '0'; // 0 = EBAY_US
 const COMPATIBILITY_LEVEL = '1193';
 
 const parser = new XMLParser({ ignoreAttributes: false, parseTagValue: true });
+const builder = new XMLBuilder({
+  ignoreAttributes: false,
+  suppressEmptyNode: true,
+  format: false
+});
 
 function escapeXml(str) {
   if (str === undefined || str === null) return '';
@@ -15,6 +20,16 @@ function escapeXml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
+}
+
+function toArray(value) {
+  if (value === undefined || value === null) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function buildFragment(tagName, value) {
+  if (value === undefined || value === null) return '';
+  return builder.build({ [tagName]: value });
 }
 
 async function sleep(ms) {
@@ -126,6 +141,22 @@ async function addFixedPriceItem(item, policyIds, oauthToken) {
   const quantity = Number(item.Quantity || 1);
   const price = item.StartPrice?.['#text'] ?? item.StartPrice ?? item.BuyItNowPrice?.['#text'] ?? '0.00';
   const currency = item.StartPrice?.['@_currencyID'] || 'USD';
+  const useBusinessPolicies = Boolean(
+    policyIds?.paymentPolicyId &&
+    policyIds?.fulfillmentPolicyId &&
+    policyIds?.returnPolicyId
+  );
+
+  const legacyPaymentMethods = toArray(item.PaymentMethods)
+    .filter(Boolean)
+    .map(method => `<PaymentMethods>${escapeXml(method)}</PaymentMethods>`)
+    .join('');
+
+  const shippingDetailsXml = useBusinessPolicies ? '' : buildFragment('ShippingDetails', item.ShippingDetails);
+  const returnPolicyXml = useBusinessPolicies ? '' : buildFragment('ReturnPolicy', item.ReturnPolicy);
+  const payPalEmailXml = useBusinessPolicies || !item.PayPalEmailAddress
+    ? ''
+    : `<PayPalEmailAddress>${escapeXml(item.PayPalEmailAddress)}</PayPalEmailAddress>`;
 
   const body = `
   <Item>
@@ -144,11 +175,15 @@ async function addFixedPriceItem(item, policyIds, oauthToken) {
     ${item.SKU ? `<SKU>${escapeXml(item.SKU)}</SKU>` : ''}
     <PictureDetails>${picsXml}</PictureDetails>
     <ItemSpecifics>${specificsXml}</ItemSpecifics>
-    <SellerProfiles>
-      <SellerPaymentProfile><PaymentProfileID>${policyIds.paymentPolicyId}</PaymentProfileID></SellerPaymentProfile>
-      <SellerReturnProfile><ReturnProfileID>${policyIds.returnPolicyId}</ReturnProfileID></SellerReturnProfile>
-      <SellerShippingProfile><ShippingProfileID>${policyIds.fulfillmentPolicyId}</ShippingProfileID></SellerShippingProfile>
-    </SellerProfiles>
+    ${
+      useBusinessPolicies
+        ? `<SellerProfiles>
+            <SellerPaymentProfile><PaymentProfileID>${policyIds.paymentPolicyId}</PaymentProfileID></SellerPaymentProfile>
+            <SellerReturnProfile><ReturnProfileID>${policyIds.returnPolicyId}</ReturnProfileID></SellerReturnProfile>
+            <SellerShippingProfile><ShippingProfileID>${policyIds.fulfillmentPolicyId}</ShippingProfileID></SellerShippingProfile>
+          </SellerProfiles>`
+        : `${legacyPaymentMethods}${payPalEmailXml}${shippingDetailsXml}${returnPolicyXml}`
+    }
   </Item>`;
 
   const root = await callTradingApi('AddFixedPriceItem', body, oauthToken);
