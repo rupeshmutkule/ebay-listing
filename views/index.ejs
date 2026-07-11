@@ -2,57 +2,266 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title><%= title %></title>
 <style>
-  body { font-family: Arial, sans-serif; margin: 24px; background: #f7f7f8; color: #222; }
-  h1 { font-size: 20px; }
-  .toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin: 16px 0; }
-  button { padding: 10px 16px; border: none; border-radius: 6px; background: #0654ba; color: #fff; cursor: pointer; font-size: 14px; }
-  button:hover { background: #054098; }
-  button.secondary { background: #444; }
-  .danger { background: #b00020; }
-  textarea { width: 100%; height: 60px; margin: 8px 0; font-family: monospace; }
-  table { border-collapse: collapse; width: 100%; background: #fff; margin-top: 10px; }
-  th, td { border: 1px solid #ddd; padding: 6px 8px; font-size: 13px; text-align: left; }
-  th { background: #eee; }
-  img.thumb { width: 40px; height: 40px; object-fit: cover; }
-  .status { font-size: 13px; margin: 8px 0; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
-  .ok { color: green; } .bad { color: #b00020; } .warn { color: #a06a00; }
+  :root {
+    color-scheme: light;
+    --bg: #f4f1ea;
+    --panel: #ffffff;
+    --panel-2: #fbfaf7;
+    --text: #1d1d1f;
+    --muted: #66615b;
+    --accent: #0f5bd7;
+    --accent-2: #0a3f95;
+    --danger: #a61b1b;
+    --border: #ded8cf;
+    --shadow: 0 18px 50px rgba(40, 30, 10, 0.08);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: Arial, Helvetica, sans-serif;
+    background:
+      radial-gradient(circle at top left, rgba(15, 91, 215, 0.12), transparent 28%),
+      radial-gradient(circle at top right, rgba(166, 27, 27, 0.08), transparent 24%),
+      linear-gradient(180deg, #f8f5ef 0%, var(--bg) 100%);
+    color: var(--text);
+  }
+
+  .shell {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 32px 20px 40px;
+  }
+
+  .hero {
+    background: linear-gradient(135deg, rgba(255,255,255,0.95), rgba(251,250,247,0.96));
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    box-shadow: var(--shadow);
+    padding: 24px;
+    margin-bottom: 18px;
+  }
+
+  h1 {
+    margin: 0 0 10px;
+    font-size: clamp(24px, 3vw, 36px);
+    letter-spacing: -0.03em;
+  }
+
+  .lede {
+    margin: 0;
+    max-width: 760px;
+    color: var(--muted);
+    line-height: 1.55;
+  }
+
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 18px 0;
+  }
+
+  button {
+    appearance: none;
+    border: 0;
+    border-radius: 999px;
+    padding: 11px 16px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 10px 24px rgba(15, 91, 215, 0.18);
+    transition: transform 120ms ease, background 120ms ease, opacity 120ms ease;
+  }
+
+  button:hover { background: var(--accent-2); transform: translateY(-1px); }
+  button:disabled { cursor: not-allowed; opacity: 0.6; transform: none; }
+  button.secondary { background: #4f4a44; }
+  button.secondary:hover { background: #372f28; }
+  button.danger { background: var(--danger); }
+  button.danger:hover { background: #841515; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    box-shadow: var(--shadow);
+    padding: 18px;
+    margin-bottom: 18px;
+  }
+
+  label {
+    display: inline-block;
+    margin-bottom: 8px;
+    font-weight: 700;
+  }
+
+  textarea {
+    width: 100%;
+    min-height: 72px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    padding: 12px;
+    font-family: Consolas, "Courier New", monospace;
+    resize: vertical;
+  }
+
+  .status {
+    font-size: 14px;
+    line-height: 1.45;
+    max-height: 340px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .log-line {
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: var(--panel-2);
+    border: 1px solid #efe7db;
+  }
+
+  .log-ok { color: #1a6b2b; }
+  .log-bad { color: var(--danger); }
+  .log-warn { color: #8d6200; }
+
+  .summary {
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+    border-radius: 14px;
+    overflow: hidden;
+  }
+
+  th, td {
+    border-bottom: 1px solid #e8e1d8;
+    padding: 10px 8px;
+    font-size: 13px;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  th {
+    background: #f6f1e8;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #5e564e;
+  }
+
+  img.thumb {
+    width: 40px;
+    height: 40px;
+    object-fit: cover;
+    border-radius: 8px;
+    display: block;
+  }
+
+  .job-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: #eef4ff;
+    color: #184fa1;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .job-pill.running { background: #fff4df; color: #936100; }
+  .job-pill.failed { background: #ffe7e7; color: #9e1c1c; }
+  .job-pill.completed { background: #eaf6ea; color: #216834; }
+
+  @media (max-width: 720px) {
+    .shell { padding: 16px; }
+    .hero, .panel { padding: 16px; border-radius: 16px; }
+    button { width: 100%; }
+  }
 </style>
 </head>
 <body>
-<h1><%= title %></h1>
-<p style="font-size:13px;color:#555;">
-  Identifiers below are <strong>eBay Item Numbers</strong>. Migration verifies the new listing
-  is live on Seller B before removing it from Seller A. Progress is saved to a checkpoint file,
-  so re-running the same list skips items already completed.
-</p>
+<div class="shell">
+  <section class="hero">
+    <h1><%= title %></h1>
+    <p class="lede">
+      Paste eBay Item Numbers or select products from Seller A, then migrate them to Seller B.
+      The server now runs each migration as a background job, polls progress by job ID, and stops
+      duplicate submissions for the same batch while a run is active.
+    </p>
+  </section>
 
-<div class="toolbar">
-  <button id="btnFetch">1. Fetch products from Seller A</button>
-  <button id="btnMigrate" class="danger">2. Migrate selected to Seller B (removes from A)</button>
-  <button id="btnViewB" class="secondary">3. View products live on Seller B</button>
-  <button id="btnStatus" class="secondary">Check migration progress</button>
+  <section class="panel">
+    <div class="toolbar">
+      <button id="btnFetch">1. Fetch products from Seller A</button>
+      <button id="btnMigrate" class="danger">2. Migrate selected to Seller B</button>
+      <button id="btnViewB" class="secondary">3. View products live on Seller B</button>
+      <button id="btnStatus" class="secondary">Check migration progress</button>
+    </div>
+
+    <label for="manualIds">Or paste specific Item Numbers, separated by commas or new lines:</label>
+    <textarea id="manualIds" placeholder="123456789012, 123456789013"></textarea>
+    <div class="summary" id="authSummary"></div>
+  </section>
+
+  <section class="panel">
+    <div class="status" id="statusBox"></div>
+  </section>
+
+  <section class="panel">
+    <div id="tableWrap"></div>
+  </section>
 </div>
-
-<div>
-  <label>Or paste specific Item Numbers (comma or newline separated) instead of using checkboxes:</label>
-  <textarea id="manualIds" placeholder="123456789012, 123456789013"></textarea>
-</div>
-
-<div class="status" id="statusBox"></div>
-<div id="tableWrap"></div>
 
 <script>
+const apiKey = <%- JSON.stringify(apiKey) %>;
 const statusBox = document.getElementById('statusBox');
 const tableWrap = document.getElementById('tableWrap');
 const manualIdsBox = document.getElementById('manualIds');
+const authSummary = document.getElementById('authSummary');
+const btnMigrate = document.getElementById('btnMigrate');
+
+authSummary.textContent = apiKey
+  ? 'API key loaded from the server for this session.'
+  : 'No app key configured. Running in local mode without the extra header.';
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[ch]);
+}
 
 function log(msg, cls) {
   const line = document.createElement('div');
+  line.className = `log-line ${cls ? `log-${cls}` : ''}`.trim();
   line.textContent = msg;
-  line.className = cls || 'ok';
   statusBox.prepend(line);
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function getManualIds() {
@@ -68,86 +277,208 @@ function getSelectedIds() {
   return manual.length ? manual : getCheckedIds();
 }
 
-async function callApi(url, options) {
-  const res = await fetch(url, options);
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ? JSON.stringify(data.error) : 'Request failed');
+async function callApi(url, options = {}) {
+  const headers = {
+    ...(options.headers || {}),
+    ...(apiKey ? { 'X-Api-Key': apiKey } : {})
+  };
+
+  const res = await fetch(url, { ...options, headers });
+  const text = await res.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (parseErr) {
+    data = { error: text || parseErr.message };
+  }
+
+  if (!res.ok) {
+    throw new Error(data.error ? JSON.stringify(data.error) : `Request failed (${res.status})`);
+  }
+
   return data;
 }
 
 function renderTable(products) {
+  if (!products.length) {
+    tableWrap.innerHTML = '<p>No products found.</p>';
+    return;
+  }
+
   const rows = products.map(p => `
     <tr>
-      <td><input type="checkbox" class="row-check" data-itemid="${p.itemId}"></td>
-      <td>${p.image ? `<img class="thumb" src="${p.image}">` : ''}</td>
-      <td>${p.itemId}</td>
-      <td>${p.sku || ''}</td>
-      <td>${p.title}</td>
-      <td>${p.quantity}</td>
-      <td>${p.status || ''}</td>
+      <td><input type="checkbox" class="row-check" data-itemid="${escapeHtml(p.itemId)}"></td>
+      <td>${p.image ? `<img class="thumb" src="${escapeHtml(p.image)}" alt="">` : ''}</td>
+      <td>${escapeHtml(p.itemId)}</td>
+      <td>${escapeHtml(p.sku || '')}</td>
+      <td>${escapeHtml(p.title || '')}</td>
+      <td>${escapeHtml(p.quantity)}</td>
+      <td>${escapeHtml(p.status || '')}</td>
     </tr>
   `).join('');
+
   tableWrap.innerHTML = `
     <p><label><input type="checkbox" id="checkAll"> select all (${products.length})</label></p>
-    <table>
-      <thead><tr><th></th><th>Image</th><th>Item Number</th><th>SKU</th><th>Title</th><th>Qty</th><th>Status</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
-  document.getElementById('checkAll').onchange = (e) => {
-    document.querySelectorAll('.row-check').forEach(cb => cb.checked = e.target.checked);
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th>Image</th>
+            <th>Item Number</th>
+            <th>SKU</th>
+            <th>Title</th>
+            <th>Qty</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+
+  document.getElementById('checkAll').onchange = (event) => {
+    document.querySelectorAll('.row-check').forEach(cb => {
+      cb.checked = event.target.checked;
+    });
   };
+}
+
+function renderJob(job, prefix) {
+  const suffix = job.error ? ` - ${job.error}` : '';
+  const cls = job.status === 'failed' ? 'bad' : job.status === 'completed_with_errors' ? 'warn' : job.status === 'running' ? 'warn' : 'ok';
+  log(
+    `${prefix} ${job.jobId} [${job.status}] ${job.completed}/${job.total} completed, ${job.succeeded} succeeded, ${job.failed} failed${suffix}`,
+    cls
+  );
+}
+
+async function pollJob(jobId) {
+  let lastCount = 0;
+  let lastStatus = '';
+
+  while (true) {
+    let data;
+    try {
+      data = await callApi(`/api/migrate/jobs/${jobId}`);
+    } catch (err) {
+      if (err.message.includes('Job not found')) {
+        log(`Job ${jobId} is no longer available on the server.`, 'bad');
+        return null;
+      }
+      log(`Job poll failed: ${err.message} - retrying...`, 'warn');
+      await sleep(3000);
+      continue;
+    }
+
+    const job = data.job;
+
+    if (job.results.length > lastCount) {
+      const newResults = job.results.slice(lastCount);
+      newResults.forEach(result => {
+        if (result.success) {
+          log(
+            result.skipped
+              ? `  ${result.itemId}: skipped - already completed in a previous run`
+              : `  ${result.itemId}: now live on B as ${result.newItemIdOnB}, removed from A`,
+            'ok'
+          );
+        } else {
+          log(`  ${result.itemId}: FAILED - ${result.error}`, 'bad');
+        }
+      });
+      lastCount = job.results.length;
+    }
+
+    if (job.status !== lastStatus) {
+      renderJob(job, 'Job update:');
+      lastStatus = job.status;
+    }
+
+    if (['completed', 'completed_with_errors', 'failed'].includes(job.status)) {
+      return job;
+    }
+
+    await sleep(2000);
+  }
 }
 
 document.getElementById('btnFetch').onclick = async () => {
   log('Fetching products from Seller A...');
   try {
     const data = await callApi('/api/seller-a/products');
-    log(`Found ${data.count} products on Seller A`);
+    log(`Found ${data.count} products on Seller A`, 'ok');
     renderTable(data.products);
-  } catch (err) { log('Fetch failed: ' + err.message, 'bad'); }
+  } catch (err) {
+    log(`Fetch failed: ${err.message}`, 'bad');
+  }
 };
 
-document.getElementById('btnMigrate').onclick = async () => {
+btnMigrate.onclick = async () => {
   const itemIds = getSelectedIds();
-  if (!itemIds.length) return log('Select products (or paste Item Numbers) first.', 'bad');
-  if (!confirm(`Migrate ${itemIds.length} product(s) to Seller B and remove them from Seller A?`)) return;
-  log(`Migrating ${itemIds.length} product(s) to Seller B... this can take a while for large batches.`);
+  if (!itemIds.length) {
+    return log('Select products or paste Item Numbers first.', 'bad');
+  }
+
+  if (!confirm(`Migrate ${itemIds.length} product(s) to Seller B and remove them from Seller A?`)) {
+    return;
+  }
+
+  btnMigrate.disabled = true;
+  log(`Submitting ${itemIds.length} product(s) for migration...`);
+
   try {
     const data = await callApi('/api/migrate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ itemIds })
     });
-    log(`Migration done: ${data.succeeded} succeeded, ${data.failed} failed`);
-    data.results.forEach(r => {
-      if (r.success) {
-        log(`  ${r.itemId}: now live on B as ${r.newItemIdOnB}, removed from A`, 'ok');
-      } else {
-        log(`  ${r.itemId}: FAILED — ${r.error}`, 'bad');
-      }
-    });
-  } catch (err) { log('Migration failed: ' + err.message, 'bad'); }
+
+    if (data.duplicate) {
+      log(`Matching job already running: ${data.job.jobId}`, 'warn');
+    } else {
+      log(`Job started: ${data.job.jobId}`, 'ok');
+    }
+
+    await pollJob(data.job.jobId);
+    log('Migration job finished.', 'ok');
+  } catch (err) {
+    log(`Migration failed: ${err.message}`, 'bad');
+  } finally {
+    btnMigrate.disabled = false;
+  }
 };
 
 document.getElementById('btnViewB').onclick = async () => {
   log('Fetching products from Seller B...');
   try {
     const data = await callApi('/api/seller-b/products');
-    log(`Found ${data.count} products on Seller B`);
+    log(`Found ${data.count} products on Seller B`, 'ok');
     renderTable(data.products);
-  } catch (err) { log('Fetch failed: ' + err.message, 'bad'); }
+  } catch (err) {
+    log(`Fetch failed: ${err.message}`, 'bad');
+  }
 };
 
 document.getElementById('btnStatus').onclick = async () => {
   try {
     const data = await callApi('/api/migration-status');
     const entries = Object.entries(data.checkpoint);
-    log(`Checkpoint has ${entries.length} tracked item(s)`);
+    log(`Checkpoint has ${entries.length} tracked item(s)`, 'ok');
+
     entries.forEach(([itemId, info]) => {
       const cls = info.status === 'removed_from_a' ? 'ok' : info.status === 'failed' ? 'bad' : 'warn';
       log(`  ${itemId}: ${info.status}${info.newItemIdOnB ? ' -> ' + info.newItemIdOnB : ''}`, cls);
     });
-  } catch (err) { log('Status check failed: ' + err.message, 'bad'); }
+
+    if (Array.isArray(data.jobs) && data.jobs.length) {
+      log(`Active or recent jobs: ${data.jobs.length}`, 'ok');
+      data.jobs.forEach(job => {
+        renderJob(job, '  Job:');
+      });
+    }
+  } catch (err) {
+    log(`Status check failed: ${err.message}`, 'bad');
+  }
 };
 </script>
 </body>

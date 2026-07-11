@@ -25,8 +25,24 @@ exports.migrateProducts = async (req, res) => {
     return res.status(400).json({ error: 'Provide itemIds: string[] (eBay Item Numbers) in the request body' });
   }
   try {
-    const result = await migrationService.migrateItems(itemIds);
-    res.json({ success: true, ...result });
+    const result = migrationService.startMigrationJob(itemIds);
+    res.status(result.duplicate ? 200 : 202).json({
+      success: true,
+      ...result
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.response ? err.response.data : err.message });
+  }
+};
+
+exports.getJobStatus = async (req, res) => {
+  try {
+    const job = migrationService.getJobStatus(req.params.jobId);
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    res.json({ success: true, job });
   } catch (err) {
     res.status(500).json({ error: err.response ? err.response.data : err.message });
   }
@@ -37,7 +53,7 @@ exports.migrateProducts = async (req, res) => {
 exports.getMigrationStatus = async (req, res) => {
   try {
     const data = checkpoint.loadCheckpoint();
-    res.json({ success: true, checkpoint: data });
+    res.json({ success: true, checkpoint: data, jobs: migrationService.listJobs() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

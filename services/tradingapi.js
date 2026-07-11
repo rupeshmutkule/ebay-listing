@@ -22,20 +22,22 @@ async function sleep(ms) {
 }
 
 // Generic Trading API caller with exponential backoff on throttling/5xx.
-// `oauthToken` is the seller's current access token (from ebayAuth.js).
+// `oauthToken` is the seller's current OAuth access token (from ebayAuth.js).
 async function callTradingApi(callName, xmlBody, oauthToken, attempt = 1) {
+  if (!oauthToken) {
+    throw new Error(`Missing OAuth token for ${callName}`);
+  }
+
   const headers = {
     'X-EBAY-API-SITEID': SITE_ID,
     'X-EBAY-API-COMPATIBILITY-LEVEL': COMPATIBILITY_LEVEL,
     'X-EBAY-API-CALL-NAME': callName,
+    'X-EBAY-API-IAF-TOKEN': oauthToken,
     'Content-Type': 'text/xml'
   };
 
   const envelope = `<?xml version="1.0" encoding="utf-8"?>
 <${callName}Request xmlns="urn:ebay:apis:eBLBaseComponents">
-  <RequesterCredentials>
-    <eBayAuthToken>${oauthToken}</eBayAuthToken>
-  </RequesterCredentials>
   ${xmlBody}
 </${callName}Request>`;
 
