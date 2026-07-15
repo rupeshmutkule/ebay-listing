@@ -15,5 +15,6 @@ router.post('/api/migrate', requireApiKey, migrationController.migrateProducts);
 router.get('/api/migrate/jobs/:jobId', requireApiKey, migrationController.getJobStatus);
 router.get('/api/seller-b/products', requireApiKey, migrationController.listSellerBProducts);
 router.get('/api/migration-status', requireApiKey, migrationController.getMigrationStatus);
+router.get('/api/migration-report/csv', requireApiKey, migrationController.downloadMigrationReport);
 
 module.exports = router;

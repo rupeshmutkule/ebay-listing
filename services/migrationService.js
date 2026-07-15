@@ -366,6 +366,34 @@ async function listSellerBItems() {
   }));
 }
 
+// ---------- Link report: Old eBay URL -> New eBay URL + title ----------
+async function generateLinkReport() {
+  const data = checkpoint.loadCheckpoint();
+  const tokenB = await sellerB.getToken();
+
+  const rows = [];
+
+  for (const [oldItemId, entry] of Object.entries(data)) {
+    if (entry.status !== 'removed_from_a' || !entry.newItemIdOnB) continue;
+
+    const oldLink = `https://www.ebay.com/itm/${oldItemId}`;
+    const newLink = `https://www.ebay.com/itm/${entry.newItemIdOnB}`;
+
+    let title = '';
+    try {
+      const item = await tradingApi.getItem(entry.newItemIdOnB, tokenB);
+      title = item?.Title || '';
+    } catch {
+      title = '';
+    }
+
+    rows.push({ oldLink, newLink, title });
+    await sleep(150);
+  }
+
+  return rows;
+}
+
 module.exports = {
   migrateItems,
   listSellerAItems,
@@ -373,5 +401,6 @@ module.exports = {
   migrateOneItem,
   startMigrationJob,
   getJobStatus,
-  listJobs
+  listJobs,
+  generateLinkReport
 };

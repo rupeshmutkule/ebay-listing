@@ -58,3 +58,22 @@ exports.getMigrationStatus = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+// Returns a CSV with Old Link, New Link, eBay Title for every completed migration.
+// Download it and use it to bulk-update your database links.
+exports.downloadMigrationReport = async (req, res) => {
+  try {
+    const rows = await migrationService.generateLinkReport();
+
+    const escape = (val) => `"${String(val).replace(/"/g, '""')}"`;
+    const header = 'Old Link,New Link,eBay Title';
+    const lines = rows.map(r => [escape(r.oldLink), escape(r.newLink), escape(r.title)].join(','));
+    const csv = [header, ...lines].join('\r\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="migration-link-report.csv"');
+    res.send(csv);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
