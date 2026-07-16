@@ -189,7 +189,7 @@ async function migrateOneItem(itemId, policiesB) {
 
       const created = await tradingApi.addFixedPriceItem(sourceItem, policiesB, tokenB);
       newItemIdOnB = created.itemId;
-      checkpoint.updateItem(itemId, { status: 'listed_on_b', newItemIdOnB });
+      checkpoint.updateItem(itemId, { status: 'listed_on_b', newItemIdOnB, title: sourceItem.Title || '' });
     }
 
     // Step 2: verify it's actually live on Seller B before touching Seller A.
@@ -369,26 +369,17 @@ async function listSellerBItems() {
 // ---------- Link report: Old eBay URL -> New eBay URL + title ----------
 async function generateLinkReport() {
   const data = checkpoint.loadCheckpoint();
-  const tokenB = await sellerB.getToken();
 
   const rows = [];
 
   for (const [oldItemId, entry] of Object.entries(data)) {
     if (entry.status !== 'removed_from_a' || !entry.newItemIdOnB) continue;
 
-    const oldLink = `https://www.ebay.com/itm/${oldItemId}`;
-    const newLink = `https://www.ebay.com/itm/${entry.newItemIdOnB}`;
-
-    let title = '';
-    try {
-      const item = await tradingApi.getItem(entry.newItemIdOnB, tokenB);
-      title = item?.Title || '';
-    } catch {
-      title = '';
-    }
-
-    rows.push({ oldLink, newLink, title });
-    await sleep(150);
+    rows.push({
+      oldLink: `https://www.ebay.com/itm/${oldItemId}`,
+      newLink: `https://www.ebay.com/itm/${entry.newItemIdOnB}`,
+      title: entry.title || ''
+    });
   }
 
   return rows;
