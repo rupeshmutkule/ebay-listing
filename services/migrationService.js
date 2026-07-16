@@ -369,20 +369,32 @@ async function listSellerBItems() {
 // ---------- Link report: Old eBay URL -> New eBay URL + title ----------
 async function generateLinkReport() {
   const data = checkpoint.loadCheckpoint();
+  const tokenB = await sellerB.getToken();
 
-  const rows = [];
+  const entries = Object.entries(data).filter(
+    ([, entry]) => entry.status === 'removed_from_a' && entry.newItemIdOnB
+  );
 
-  for (const [oldItemId, entry] of Object.entries(data)) {
-    if (entry.status !== 'removed_from_a' || !entry.newItemIdOnB) continue;
+  // Fetch missing titles in parallel batches to avoid hitting eBay rate limits.
+  const BATCH_SIZE = 10;
+  const promises = entries.map(([, entry]) =>
+    entry.title
+      ? Promise.resolve(entry.title)
+      : tradingApi.getItem(entry.newItemIdOnB, tokenB).then(item => item?.Title || '')
+  );
 
-    rows.push({
-      oldLink: `https://www.ebay.com/itm/${oldItemId}`,
-      newLink: `https://www.ebay.com/itm/${entry.newItemIdOnB}`,
-      title: entry.title || ''
-    });
+  const titleResults = [];
+  for (let i = 0; i < promises.length; i += BATCH_SIZE) {
+    const batch = await Promise.allSettled(promises.slice(i, i + BATCH_SIZE));
+    titleResults.push(...batch);
+    if (i + BATCH_SIZE < promises.length) await sleep(200);
   }
 
-  return rows;
+  return entries.map(([oldItemId, entry], i) => ({
+    oldLink: `https://www.ebay.com/itm/${oldItemId}`,
+    newLink: `https://www.ebay.com/itm/${entry.newItemIdOnB}`,
+    title: titleResults[i].status === 'fulfilled' ? titleResults[i].value : ''
+  }));
 }
 
 module.exports = {
