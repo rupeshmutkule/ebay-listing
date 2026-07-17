@@ -5,6 +5,7 @@ const checkpoint = require('./checkpoint');
 
 const jobs = new Map();
 const activeBatchKeys = new Map();
+let cachedSellerBPolicies = null;
 
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -36,22 +37,83 @@ function getConfiguredSellerBPolicies() {
   };
 }
 
+function extractPolicyIdsFromItem(item) {
+  const sellerProfiles = item?.SellerProfiles;
+  const paymentPolicyId =
+    sellerProfiles?.SellerPaymentProfile?.PaymentProfileID ||
+    sellerProfiles?.SellerPaymentProfile?.PaymentProfileId ||
+    sellerProfiles?.SellerPaymentProfile?.ProfileID ||
+    sellerProfiles?.PaymentProfileID;
+  const fulfillmentPolicyId =
+    sellerProfiles?.SellerShippingProfile?.ShippingProfileID ||
+    sellerProfiles?.SellerShippingProfile?.ShippingProfileId ||
+    sellerProfiles?.SellerShippingProfile?.ProfileID ||
+    sellerProfiles?.ShippingProfileID;
+  const returnPolicyId =
+    sellerProfiles?.SellerReturnProfile?.ReturnProfileID ||
+    sellerProfiles?.SellerReturnProfile?.ReturnProfileId ||
+    sellerProfiles?.SellerReturnProfile?.ProfileID ||
+    sellerProfiles?.ReturnProfileID;
+
+  if (!paymentPolicyId || !fulfillmentPolicyId || !returnPolicyId) {
+    return null;
+  }
+
+  return {
+    paymentPolicyId: String(paymentPolicyId),
+    fulfillmentPolicyId: String(fulfillmentPolicyId),
+    returnPolicyId: String(returnPolicyId),
+    source: 'live_listing'
+  };
+}
+
+async function inferSellerBPoliciesFromLiveListing(tokenB) {
+  if (cachedSellerBPolicies?.source === 'live_listing') {
+    return cachedSellerBPolicies;
+  }
+
+  const firstPage = await tradingApi.getSellerList(tokenB, { pageNumber: 1, entriesPerPage: 1 });
+  const firstItemId = firstPage.items?.[0]?.ItemID;
+  if (!firstItemId) {
+    return null;
+  }
+
+  const liveItem = await tradingApi.getItem(firstItemId, tokenB);
+  const inferred = extractPolicyIdsFromItem(liveItem);
+  if (inferred) {
+    cachedSellerBPolicies = inferred;
+    console.log('[migration] Inferred Seller B policy IDs from an existing live listing.');
+  }
+  return inferred;
+}
+
 async function resolveSellerBPolicies(tokenB) {
+  if (cachedSellerBPolicies) {
+    return cachedSellerBPolicies;
+  }
+
   const configured = getConfiguredSellerBPolicies();
   if (configured) {
     console.log('[migration] Using Semi Equipment policy IDs from environment variables.');
+    cachedSellerBPolicies = configured;
     return configured;
   }
 
   console.log('[migration] Semi Equipment policy IDs not set in env; fetching from eBay Account API.');
   try {
-    return await getSellerPolicies(tokenB);
+    const policies = await getSellerPolicies(tokenB);
+    cachedSellerBPolicies = policies;
+    return policies;
   } catch (err) {
     const status = err.response?.status;
     if (status === 403) {
+      const inferred = await inferSellerBPoliciesFromLiveListing(tokenB);
+      if (inferred) {
+        return inferred;
+      }
       console.warn(
-        '[migration] Semi Equipment policy lookup returned 403; falling back to legacy Trading API fields ' +
-        'cloned from the source listing.'
+        '[migration] Semi Equipment policy lookup returned 403 and no live listing could be used ' +
+        'to infer policy IDs.'
       );
       return null;
     }
@@ -119,6 +181,28 @@ function updateJob(jobId, patch) {
   return snapshotJob(job);
 }
 
+function classifyItemError(message) {
+  const text = String(message || '');
+  if (/exceed the amount you can list/i.test(text) || /selling limits/i.test(text)) {
+    return {
+      kind: 'selling_limit',
+      message:
+        'eBay selling limit reached for this item. ' +
+        'Wait for the limit reset or lower the item price, then retry.'
+    };
+  }
+
+  if (/business policies/i.test(text) || /policy IDs rather than legacy fields/i.test(text)) {
+    return {
+      kind: 'business_policies',
+      message:
+        'Seller B uses business policies. The app will try to reuse policy IDs from an existing live listing.'
+    };
+  }
+
+  return null;
+}
+
 async function runMigrationBatch(itemIds, policiesB, onResult) {
   const results = [];
   let succeeded = 0;
@@ -139,7 +223,13 @@ async function runMigrationBatch(itemIds, policiesB, onResult) {
         onResult(entry, { total: itemIds.length, succeeded, failed, skipped, completed: results.length, results });
       }
     } catch (err) {
-      const entry = { itemId, success: false, error: err.message };
+      const classified = classifyItemError(err.message);
+      const entry = {
+        itemId,
+        success: false,
+        error: classified?.message || err.message,
+        errorKind: classified?.kind || null
+      };
       failed += 1;
       results.push(entry);
       if (typeof onResult === 'function') {
@@ -170,6 +260,7 @@ async function migrateOneItem(itemId, policiesB) {
   }
 
   let newItemIdOnB = existing?.newItemIdOnB || null;
+  let sourceItem = null;
 
   try {
     const tokenA = await sellerA.getToken();
@@ -177,7 +268,7 @@ async function migrateOneItem(itemId, policiesB) {
 
     // Step 1: create on Seller B, unless a prior run already got this far.
     if (!newItemIdOnB) {
-      const sourceItem = await tradingApi.getItem(itemId, tokenA);
+      sourceItem = await tradingApi.getItem(itemId, tokenA);
       if (!sourceItem) {
         throw new Error(`Item ${itemId} not found on Bridge Tronic Global (already removed or invalid ID)`);
       }
@@ -187,9 +278,29 @@ async function migrateOneItem(itemId, policiesB) {
         throw new Error(`Item ${itemId} is not Active on Bridge Tronic Global (status: ${listingStatus}) - skipping`);
       }
 
-      const created = await tradingApi.addFixedPriceItem(sourceItem, policiesB, tokenB);
-      newItemIdOnB = created.itemId;
-      checkpoint.updateItem(itemId, { status: 'listed_on_b', newItemIdOnB, title: sourceItem.Title || '' });
+      try {
+        const created = await tradingApi.addFixedPriceItem(sourceItem, policiesB, tokenB);
+        newItemIdOnB = created.itemId;
+        checkpoint.updateItem(itemId, { status: 'listed_on_b', newItemIdOnB, title: sourceItem.Title || '' });
+      } catch (createErr) {
+        const createMessage = String(createErr.message || '');
+        const needsPolicyRetry = /business policies/i.test(createMessage) || /policy IDs rather than legacy fields/i.test(createMessage);
+        if (!needsPolicyRetry) {
+          throw createErr;
+        }
+
+        const inferredPolicies = await inferSellerBPoliciesFromLiveListing(tokenB);
+        if (!inferredPolicies) {
+          throw new Error(
+            `${createErr.message} ` +
+            'Also could not infer Seller B policy IDs from an existing live listing.'
+          );
+        }
+
+        const retryCreated = await tradingApi.addFixedPriceItem(sourceItem, inferredPolicies, tokenB);
+        newItemIdOnB = retryCreated.itemId;
+        checkpoint.updateItem(itemId, { status: 'listed_on_b', newItemIdOnB, title: sourceItem.Title || '' });
+      }
     }
 
     // Step 2: verify it's actually live on Seller B before touching Seller A.
