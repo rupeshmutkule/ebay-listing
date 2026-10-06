@@ -7,7 +7,7 @@ app.use(express.json({ limit: '2mb' }));
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
-// Redirect root to the app
+// Redirect root to the app hello 
 app.get('/', (req, res) => res.redirect('/ebay-store-migration'));
 
 // Mount all routes under /ebay-store-migration
