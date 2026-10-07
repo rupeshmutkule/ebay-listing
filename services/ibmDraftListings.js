@@ -46,7 +46,6 @@ async function getReadiness() {
     { name: 'Production eBay environment', ready: (process.env.EBAY_ENV || 'production').toLowerCase() === 'production', detail: (process.env.EBAY_ENV || 'production').toLowerCase() === 'production' ? 'Configured' : 'Set EBAY_ENV=production for this production listing workflow' },
     { name: 'Inventory API OAuth scope', ready: scopes.has('https://api.ebay.com/oauth/api_scope/sell.inventory'), detail: scopes.has('https://api.ebay.com/oauth/api_scope/sell.inventory') ? 'Configured' : 'Add sell.inventory to EBAY_OAUTH_SCOPES and reauthorize Seller B' },
     { name: 'Account API OAuth scope', ready: scopes.has('https://api.ebay.com/oauth/api_scope/sell.account'), detail: scopes.has('https://api.ebay.com/oauth/api_scope/sell.account') ? 'Configured' : 'Add sell.account to EBAY_OAUTH_SCOPES and reauthorize Seller B' },
-    { name: 'Return policy', ready: Boolean(process.env.IBM_RETURN_POLICY_ID?.trim()), detail: process.env.IBM_RETURN_POLICY_ID ? 'Configured' : 'Set IBM_RETURN_POLICY_ID for the client’s chosen return policy' },
     { name: '85004 inventory location key', ready: true, detail: `Configured: ${MERCHANT_LOCATION_KEY}; created on Seller B if not already present` },
     { name: 'eBay category', ready: Boolean(CATEGORY_ID), detail: `Category ${CATEGORY_ID}` }
   ];
@@ -69,13 +68,19 @@ async function getReadiness() {
         },
         timeout: 30000
       });
-      await getPolicies(client);
+      const fulfillmentPolicies = await getPolicies(client);
       checks.push({ name: 'Seller B eBay API access', ready: true, detail: 'Authenticated; Seller B fulfillment policies are readable' });
+      const hasFiveDayShipping = fulfillmentPolicies.some((policy) => policyCostCandidates(policy).length > 0);
+      checks.push({
+        name: 'Five-business-day shipping policy',
+        ready: hasFiveDayShipping,
+        detail: hasFiveDayShipping ? 'At least one domestic flat-rate, five-day policy is available' : 'Create or select a domestic flat-rate fulfillment policy with 5 business days handling'
+      });
       try {
-        await getPolicyIds(client);
-        checks.push({ name: 'Seller B payment and return policies', ready: true, detail: 'Configured and readable' });
+        const policyIds = await getPolicyIds(client);
+        checks.push({ name: 'Seller B payment and return policies', ready: true, detail: `Configured and readable; return policy: ${policyIds.returnPolicyName}` });
       } catch (error) {
-        checks.push({ name: 'Seller B payment and return policies', ready: false, detail: describeApiError(error) });
+        checks.push({ name: 'Seller B payment and return policies', ready: false, detail: error.message || describeApiError(error) });
       }
     } catch (error) {
       checks.push({ name: 'Seller B eBay API access', ready: false, detail: describeApiError(error) });
@@ -83,7 +88,12 @@ async function getReadiness() {
   } else {
     checks.push({ name: 'Seller B eBay API access', ready: false, detail: 'Resolve the missing client/token/scope/environment checks above first' });
   }
-  return { ready: checks.every((check) => check.ready), checks };
+  // Auth'n'Auth is only used by the optional legacy Trading API product-view
+  // button. It must not block the REST Inventory API draft workflow.
+  const listingChecks = checks.filter((check) => check.name !== 'Seller B Auth’n’Auth token for Trading API view');
+  const listingReady = listingChecks.every((check) => check.ready);
+  const viewCheck = checks.find((check) => check.name === 'Seller B Auth’n’Auth token for Trading API view');
+  return { ready: listingReady, listingReady, viewReady: Boolean(viewCheck?.ready), checks };
 }
 
 function clean(value) {
@@ -274,26 +284,56 @@ async function ensureMerchantLocation(client) {
 
 async function getPolicyIds(client) {
   let paymentPolicyId = process.env.IBM_PAYMENT_POLICY_ID?.trim();
-  if (!paymentPolicyId) {
+  {
     const result = await getJson(client, `/sell/account/v1/payment_policy?marketplace_id=${MARKETPLACE_ID}&limit=100`);
     const policies = result.paymentPolicies || [];
-    const namedMatches = policies.filter((policy) => /managed\s*payments/i.test(policy.name || ''));
-    const exactMatches = namedMatches.filter((policy) => String(policy.name).trim().toLowerCase() === 'ebay managed payments');
-    const match = exactMatches.length === 1 ? exactMatches[0] : namedMatches.length === 1 ? namedMatches[0] : null;
-    if (match) paymentPolicyId = match.paymentPolicyId;
-    else {
-      const names = policies.map((policy) => policy.name).filter(Boolean).join(', ') || 'none returned';
-      throw new Error(`Set IBM_PAYMENT_POLICY_ID to the REST policy ID for eBay Managed Payments. Matching policy was ambiguous or not found. Account policy names: ${names}`);
+    if (paymentPolicyId && !policies.some((policy) => String(policy.paymentPolicyId) === paymentPolicyId)) {
+      throw new Error('IBM_PAYMENT_POLICY_ID is not a payment policy belonging to Seller B on EBAY_US.');
+    }
+    if (!paymentPolicyId) {
+      const namedMatches = policies.filter((policy) => /managed\s*payments/i.test(policy.name || ''));
+      const exactMatches = namedMatches.filter((policy) => String(policy.name).trim().toLowerCase() === 'ebay managed payments');
+      const match = exactMatches.length === 1 ? exactMatches[0] : namedMatches.length === 1 ? namedMatches[0] : null;
+      if (match) paymentPolicyId = match.paymentPolicyId;
+      else {
+        const names = policies.map((policy) => policy.name).filter(Boolean).join(', ') || 'none returned';
+        throw new Error(`Set IBM_PAYMENT_POLICY_ID to the REST policy ID for eBay Managed Payments. Matching policy was ambiguous or not found. Account policy names: ${names}`);
+      }
     }
   }
-  const returnPolicyId = process.env.IBM_RETURN_POLICY_ID?.trim();
-  if (!returnPolicyId) {
-    const result = await getJson(client, `/sell/account/v1/return_policy?marketplace_id=${MARKETPLACE_ID}&limit=100`);
-    const policies = result.returnPolicies || [];
-    const choices = policies.map((policy) => `${policy.name || '(unnamed)'} [${policy.returnPolicyId}]`).join(', ') || 'none returned';
-    throw new Error(`Set IBM_RETURN_POLICY_ID to the client-approved REST return policy. Seller B policy choices: ${choices}`);
+  const returnResult = await getJson(client, `/sell/account/v1/return_policy?marketplace_id=${MARKETPLACE_ID}&limit=100`);
+  const returnPolicies = returnResult.returnPolicies || [];
+  const configuredReturnPolicyId = process.env.IBM_RETURN_POLICY_ID?.trim();
+  const matchesRequestedTerms = (policy) => {
+    const method = String(policy.returnMethod || '').toUpperCase();
+    return policy.returnsAccepted === true &&
+      Number(policy.returnPeriod?.value) === 30 &&
+      ['DAY', 'DAYS'].includes(String(policy.returnPeriod?.unit || '').toUpperCase()) &&
+      String(policy.returnShippingCostPayer || '').toUpperCase() === 'BUYER' &&
+      ['REPLACEMENT', 'MONEY_BACK_OR_REPLACEMENT'].includes(method);
+  };
+  let selectedReturnPolicy;
+  if (configuredReturnPolicyId) {
+    selectedReturnPolicy = returnPolicies.find((policy) => String(policy.returnPolicyId) === configuredReturnPolicyId);
+    if (!selectedReturnPolicy) {
+      throw new Error('IBM_RETURN_POLICY_ID is not a return policy belonging to Seller B on EBAY_US.');
+    }
+    if (!matchesRequestedTerms(selectedReturnPolicy)) {
+      throw new Error('IBM_RETURN_POLICY_ID does not match the specified 30-day, buyer-paid, money-back-or-replacement terms.');
+    }
+  } else {
+    const matches = returnPolicies.filter(matchesRequestedTerms);
+    if (matches.length !== 1) {
+      const choices = matches.map((policy) => `${policy.name || '(unnamed)'} [${policy.returnPolicyId}]`).join(', ') || 'no matching policy found';
+      throw new Error(`Could not uniquely identify Seller B’s 30-day, buyer-paid, money-back-or-replacement return policy (${choices}). Set IBM_RETURN_POLICY_ID to the approved matching policy ID.`);
+    }
+    [selectedReturnPolicy] = matches;
   }
-  return { paymentPolicyId, returnPolicyId };
+  return {
+    paymentPolicyId,
+    returnPolicyId: selectedReturnPolicy.returnPolicyId,
+    returnPolicyName: selectedReturnPolicy.name || selectedReturnPolicy.returnPolicyId
+  };
 }
 
 function validateRows(rows, policies) {
@@ -498,12 +538,16 @@ async function runJob(jobId, inputRows) {
   }
 }
 
-function startDraftJob(inputRows) {
+async function startDraftJob(inputRows) {
   getSeller();
   if (!MERCHANT_LOCATION_KEY) throw new Error('Set IBM_MERCHANT_LOCATION_KEY in .env before creating drafts.');
-  if (!process.env.IBM_RETURN_POLICY_ID?.trim()) throw new Error('Set IBM_RETURN_POLICY_ID in .env before creating drafts.');
   const rows = inputRows || readWorkbook();
   if (!rows.length) throw new Error('No product rows were supplied.');
+  const readiness = await getReadiness();
+  if (!readiness.listingReady) {
+    const missing = readiness.checks.filter((check) => !check.ready && check.name !== 'Seller B Auth’n’Auth token for Trading API view');
+    throw new Error(`Seller B listing setup is not ready: ${missing.map((check) => `${check.name} — ${check.detail}`).join('; ')}`);
+  }
   if (activeJobId) return { duplicate: true, job: { ...jobs.get(activeJobId) } };
   return { duplicate: false, job: makeJob(rows) };
 }

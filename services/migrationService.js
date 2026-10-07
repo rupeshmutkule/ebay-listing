@@ -457,17 +457,54 @@ async function listSellerAItems() {
 }
 
 async function listSellerBItems() {
-  const tokenB = sellerBAuthToken
-    ? { type: 'authn-auth', token: sellerBAuthToken }
-    : await sellerB.getToken().catch((error) => {
-      throw new Error(`Seller B Trading API OAuth failed: ${error.message}. Configure SELLER_B_AUTH_TOKEN to use the Seller B Auth'n'Auth token for product viewing.`);
-    });
-  const first = await tradingApi.getSellerList(tokenB, { pageNumber: 1 });
-  let allItems = first.items;
+  const fetchAllPages = async (token) => {
+    const first = await tradingApi.getSellerList(token, { pageNumber: 1 });
+    let items = first.items;
 
-  for (let page = 2; page <= first.totalPages; page++) {
-    const next = await tradingApi.getSellerList(tokenB, { pageNumber: page });
-    allItems = allItems.concat(next.items);
+    for (let page = 2; page <= first.totalPages; page++) {
+      const next = await tradingApi.getSellerList(token, { pageNumber: page });
+      items = items.concat(next.items);
+    }
+    return items;
+  };
+
+  let allItems = [];
+  let oauthError = null;
+  let authnAuthError = null;
+  const hasOAuthCredentials = Boolean(
+    process.env.SELLER_B_REFRESH_TOKEN || process.env.SELLER_B_ACCESS_TOKEN
+  );
+
+  // Prefer OAuth for Trading API reads too. This was the previous fetch path,
+  // and the same OAuth user authorization is required for REST draft creation.
+  if (hasOAuthCredentials) {
+    try {
+      allItems = await fetchAllPages(await sellerB.getToken());
+    } catch (error) {
+      oauthError = error;
+    }
+  }
+
+  // Keep Auth'n'Auth as a Trading API-only fallback for legacy accounts.
+  if (allItems.length === 0 && sellerBAuthToken) {
+    try {
+      allItems = await fetchAllPages({ type: 'authn-auth', token: sellerBAuthToken });
+    } catch (error) {
+      authnAuthError = error;
+    }
+  }
+
+  if (allItems.length === 0) {
+    const details = [
+      oauthError && `OAuth failed: ${oauthError.message}`,
+      authnAuthError && `Auth'n'Auth failed: ${authnAuthError.message}`,
+      !oauthError && hasOAuthCredentials && 'OAuth returned zero active listings',
+      !authnAuthError && sellerBAuthToken && 'Auth\'n\'Auth returned zero active listings'
+    ].filter(Boolean).join('; ');
+    throw new Error(
+      `Seller B returned no active listings. ${details || 'No Seller B credentials are configured.'} ` +
+      'Confirm the token is authorized for the Semi Equipment seller and that its listings are active on eBay US.'
+    );
   }
 
   return allItems.map(item => ({

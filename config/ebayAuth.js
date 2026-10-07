@@ -27,30 +27,36 @@ class SellerTokenManager {
     this.accessToken = accessToken || null;
     this.tokenMode = (tokenMode || GLOBAL_TOKEN_MODE || 'auto').toLowerCase();
     this.ruName = ruName;
-    this.expiresAt = 0; // epoch ms
+    // A manually configured OAuth access token is short-lived (about 2 hours).
+    // Treat it as fresh when the server starts; never keep returning it forever.
+    this.expiresAt = accessToken ? Date.now() + 2 * 60 * 60 * 1000 : 0;
     this.refreshPromise = null; // in-flight refresh guard
   }
 
   async getToken() {
+    const fiveMinutes = 5 * 60 * 1000;
+
     if (this.tokenMode === 'access') {
-      if (this.accessToken) {
+      if (this.accessToken && Date.now() < this.expiresAt - fiveMinutes) {
         return this.accessToken;
       }
       if (this.refreshToken) {
-        console.warn(`[auth] ${this.label} is configured for direct access-token mode; using the configured token as-is.`);
-        this.accessToken = this.refreshToken;
-        this.expiresAt = Date.now() + 2 * 60 * 60 * 1000;
-        return this.accessToken;
+        return this._refresh();
       }
-      throw new Error(`Missing direct access token for ${this.label}. Set ${this.label.replace(/\s+/g, '_').toUpperCase()}_ACCESS_TOKEN or switch EBAY_TOKEN_MODE.`);
+      throw new Error(
+        this.accessToken
+          ? `The OAuth access token for ${this.label} has expired. Set a fresh ${this.label.replace(/\s+/g, '_').toUpperCase()}_ACCESS_TOKEN or configure a valid refresh token.`
+          : `Missing direct access token for ${this.label}. Set ${this.label.replace(/\s+/g, '_').toUpperCase()}_ACCESS_TOKEN or switch EBAY_TOKEN_MODE.`
+      );
     }
 
-    const fiveMinutes = 5 * 60 * 1000;
     if (this.accessToken && Date.now() < this.expiresAt - fiveMinutes) {
       return this.accessToken;
     }
-    if (this.accessToken && this.tokenMode !== 'refresh') {
-      return this.accessToken;
+    if (this.accessToken && this.tokenMode !== 'refresh' && !this.refreshToken) {
+      throw new Error(
+        `The OAuth access token for ${this.label} has expired. Set a fresh ${this.label.replace(/\s+/g, '_').toUpperCase()}_ACCESS_TOKEN or configure a valid refresh token.`
+      );
     }
     // Prevent multiple concurrent refreshes for the same account under load
     if (!this.refreshPromise) {

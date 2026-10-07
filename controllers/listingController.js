@@ -34,36 +34,36 @@ exports.previewWorkbook = async (req, res) => {
   }
 };
 
-exports.createDrafts = (req, res) => {
+exports.createDrafts = async (req, res) => {
   try {
-    const result = draftListings.startDraftJob();
+    const result = await draftListings.startDraftJob();
     res.status(result.duplicate ? 200 : 202).json({ success: true, ...result });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
 };
 
-exports.createDraftsFromCsv = (req, res) => {
+exports.createDraftsFromCsv = async (req, res) => {
   try {
     const rows = draftListings.parseCsv(req.body);
-    const result = draftListings.startDraftJob(rows);
+    const result = await draftListings.startDraftJob(rows);
     res.status(result.duplicate ? 200 : 202).json({ success: true, ...result });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
 };
 
-exports.createDraftsFromWorkbook = (req, res) => {
+exports.createDraftsFromWorkbook = async (req, res) => {
   try {
     const rows = draftListings.parseWorkbookBuffer(req.body);
-    const result = draftListings.startDraftJob(rows);
+    const result = await draftListings.startDraftJob(rows);
     res.status(result.duplicate ? 200 : 202).json({ success: true, ...result });
   } catch (error) {
     res.status(400).json({ error: error.response?.data || error.message });
   }
 };
 
-exports.createSelectedDrafts = (req, res) => {
+exports.createSelectedDrafts = async (req, res) => {
   try {
     const contentType = req.get('content-type') || '';
     const rows = contentType.includes('text/csv') || contentType.includes('text/plain')
@@ -77,7 +77,7 @@ exports.createSelectedDrafts = (req, res) => {
     if (selectedRows.length !== selected.size) {
       return res.status(400).json({ error: 'Some selected product rows were not found in the uploaded file.' });
     }
-    const result = draftListings.startDraftJob(selectedRows);
+    const result = await draftListings.startDraftJob(selectedRows);
     res.status(result.duplicate ? 200 : 202).json({ success: true, ...result });
   } catch (error) {
     res.status(400).json({ error: error.response?.data || error.message });
