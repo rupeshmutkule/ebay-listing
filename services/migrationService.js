@@ -2,6 +2,7 @@ const { sellerA, sellerB, sellerBAuthToken } = require('../config/ebayAuth');
 const tradingApi = require('./tradingapi');
 const { getSellerPolicies } = require('./accountApi');
 const checkpoint = require('./checkpoint');
+const { getSellerBRefreshToken } = require('./oauthStorage');
 
 const jobs = new Map();
 const activeBatchKeys = new Map();
@@ -472,7 +473,7 @@ async function listSellerBItems() {
   let oauthError = null;
   let authnAuthError = null;
   const hasOAuthCredentials = Boolean(
-    process.env.SELLER_B_REFRESH_TOKEN || process.env.SELLER_B_ACCESS_TOKEN
+    await getSellerBRefreshToken() || process.env.SELLER_B_ACCESS_TOKEN
   );
 
   // Prefer OAuth for Trading API reads too. This was the previous fetch path,

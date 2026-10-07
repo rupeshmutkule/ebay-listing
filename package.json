@@ -20,6 +20,7 @@
     "express": "^5.2.1",
     "fast-xml-parser": "^5.9.3",
     "ioredis": "^5.11.1",
+    "mongodb": "^7.7.0",
     "node-cron": "^4.5.0",
     "xlsx": "0.18.5"
   },

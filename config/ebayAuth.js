@@ -27,6 +27,7 @@ class SellerTokenManager {
     this.accessToken = accessToken || null;
     this.tokenMode = (tokenMode || GLOBAL_TOKEN_MODE || 'auto').toLowerCase();
     this.ruName = ruName;
+    this.mongoRefreshTokenLoadedAt = 0;
     // A manually configured OAuth access token is short-lived (about 2 hours).
     // Treat it as fresh when the server starts; never keep returning it forever.
     this.expiresAt = accessToken ? Date.now() + 2 * 60 * 60 * 1000 : 0;
@@ -35,6 +36,15 @@ class SellerTokenManager {
 
   async getToken() {
     const fiveMinutes = 5 * 60 * 1000;
+
+    // Vercel instances are ephemeral. Prefer the durable Seller B token in
+    // MongoDB, while retaining env-token support for existing local setups.
+    if (this.label === 'Seller B' && process.env.MONGO_URI && Date.now() - this.mongoRefreshTokenLoadedAt > 60_000) {
+      const { getSellerBRefreshToken } = require('../services/oauthStorage');
+      const storedRefreshToken = await getSellerBRefreshToken();
+      if (storedRefreshToken) this.refreshToken = storedRefreshToken;
+      this.mongoRefreshTokenLoadedAt = Date.now();
+    }
 
     if (this.tokenMode === 'access') {
       if (this.accessToken && Date.now() < this.expiresAt - fiveMinutes) {

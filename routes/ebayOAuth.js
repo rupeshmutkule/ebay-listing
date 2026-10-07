@@ -1,13 +1,11 @@
 const express = require('express');
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
 const axios = require('axios');
 const requireApiKey = require('../middleware/requireListingApiKey');
 const { sellerB } = require('../config/ebayAuth');
+const { createOAuthState, consumeOAuthState, saveSellerBRefreshToken, checkMongoStorage } = require('../services/oauthStorage');
 
 const router = express.Router();
-const pendingStates = new Map();
 const STATE_TTL_MS = 10 * 60 * 1000;
 const environment = (process.env.EBAY_ENV || 'production').toLowerCase();
 const tokenUrl = process.env.EBAY_TOKEN_URL || (environment === 'sandbox'
@@ -28,23 +26,6 @@ function callbackUrl() {
   return url.toString();
 }
 
-function saveRefreshToken(refreshToken) {
-  const envPath = path.resolve(__dirname, '..', '.env');
-  const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
-  const line = `SELLER_B_REFRESH_TOKEN=${JSON.stringify(refreshToken)}`;
-  const keyLine = /^SELLER_B_REFRESH_TOKEN=.*$/m;
-  const updated = keyLine.test(existing)
-    ? existing.replace(keyLine, line)
-    : `${existing}${existing && !existing.endsWith('\n') ? '\n' : ''}${line}\n`;
-  const tempPath = `${envPath}.${process.pid}.tmp`;
-  fs.writeFileSync(tempPath, updated, { encoding: 'utf8', mode: 0o600 });
-  fs.renameSync(tempPath, envPath);
-  process.env.SELLER_B_REFRESH_TOKEN = refreshToken;
-  sellerB.refreshToken = refreshToken;
-  sellerB.accessToken = null;
-  sellerB.expiresAt = 0;
-}
-
 function resultPage(ok, message) {
   const title = ok ? 'eBay connected' : 'eBay authorization not completed';
   const color = ok ? '#147d45' : '#b42318';
@@ -52,18 +33,18 @@ function resultPage(ok, message) {
 }
 
 // The listing UI calls this protected endpoint, then sends the seller to eBay.
-router.post('/authorize', requireApiKey, (req, res) => {
+router.post('/authorize', requireApiKey, async (req, res) => {
   try {
     const clientId = process.env.EBAY_CLIENT_ID;
     const ruName = process.env.EBAY_RUNAME;
     if (!clientId || !ruName || !process.env.EBAY_CLIENT_SECRET) {
       return res.status(503).json({ error: 'Configure the Production eBay client ID, client secret, and RuName first.' });
     }
+    await checkMongoStorage();
     const returnUrl = callbackUrl();
     // eBay's RuName must be configured in the Developer Portal to return to this URL.
     const state = crypto.randomBytes(32).toString('hex');
-    pendingStates.set(state, Date.now() + STATE_TTL_MS);
-    for (const [key, expiresAt] of pendingStates) if (expiresAt < Date.now()) pendingStates.delete(key);
+    await createOAuthState(state, Date.now() + STATE_TTL_MS);
     const authorize = new URL(environment === 'sandbox'
       ? 'https://auth.sandbox.ebay.com/oauth2/authorize'
       : 'https://auth.ebay.com/oauth2/authorize');
@@ -77,16 +58,22 @@ router.post('/authorize', requireApiKey, (req, res) => {
     }).toString();
     res.json({ authorizationUrl: authorize.toString(), callbackUrl: returnUrl });
   } catch (error) {
-    res.status(503).json({ error: error.message });
+    console.error('[ebay oauth] Could not initialize OAuth flow:', error.message);
+    res.status(503).json({ error: 'OAuth storage or callback configuration is not ready. Check the server setup and try again.' });
   }
 });
 
 // eBay sends the browser here via the RuName accept URL after consent.
 router.get('/callback', async (req, res) => {
   const state = String(req.query.state || '');
-  const expiry = pendingStates.get(state);
-  pendingStates.delete(state);
-  if (!state || !expiry || expiry < Date.now()) {
+  let validState = false;
+  try {
+    validState = await consumeOAuthState(state);
+  } catch (error) {
+    console.error('[ebay oauth] MongoDB state lookup failed.');
+    return res.status(503).send(resultPage(false, 'OAuth storage is unavailable. Contact the app administrator.'));
+  }
+  if (!validState) {
     return res.status(400).send(resultPage(false, 'This authorization link expired or was already used. Start again from the listing app.'));
   }
   if (req.query.error || !req.query.code) {
@@ -112,7 +99,10 @@ router.get('/callback', async (req, res) => {
       timeout: 20000
     });
     if (!response.data?.refresh_token) throw new Error('eBay did not return a refresh token.');
-    saveRefreshToken(response.data.refresh_token);
+    await saveSellerBRefreshToken(response.data.refresh_token);
+    sellerB.refreshToken = response.data.refresh_token;
+    sellerB.accessToken = null;
+    sellerB.expiresAt = 0;
     return res.send(resultPage(true, 'Semi Equipment has been connected. The app securely saved its refresh token and can renew access when needed.'));
   } catch (error) {
     // Never log or return token values, authorization codes, client secrets, or request bodies.

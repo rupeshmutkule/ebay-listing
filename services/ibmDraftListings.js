@@ -3,6 +3,7 @@ const path = require('path');
 const xlsx = require('xlsx');
 const axios = require('axios');
 const { sellerB } = require('../config/ebayAuth');
+const { getSellerBRefreshToken, checkMongoStorage } = require('./oauthStorage');
 
 const BASE_URL = 'https://api.ebay.com';
 const MARKETPLACE_ID = 'EBAY_US';
@@ -29,6 +30,20 @@ function describeApiError(error) {
 }
 
 async function getReadiness() {
+  let sellerBRefreshToken = (process.env.SELLER_B_REFRESH_TOKEN || '').trim();
+  let mongoStorageReady = false;
+  let mongoStorageDetail = process.env.MONGO_URI
+    ? 'Connection not checked'
+    : 'Set MONGO_URI and EBAY_TOKEN_ENCRYPTION_KEY';
+  if (process.env.MONGO_URI) {
+    try {
+      mongoStorageReady = await checkMongoStorage();
+      sellerBRefreshToken = await getSellerBRefreshToken() || sellerBRefreshToken;
+      mongoStorageDetail = 'Connected; OAuth tokens are encrypted at rest by the app';
+    } catch (error) {
+      mongoStorageDetail = error.message || 'MongoDB connection failed';
+    }
+  }
   const configuredScopes = process.env.EBAY_OAUTH_SCOPES || [
     'https://api.ebay.com/oauth/api_scope/sell.inventory',
     'https://api.ebay.com/oauth/api_scope/sell.account'
@@ -41,7 +56,8 @@ async function getReadiness() {
     { name: 'App API key', ready: appKeyConfigured, detail: appKeyConfigured ? 'Configured' : 'Set MIGRATION_TOOL_API_KEY, API_KEY, or SHARED_SECRET' },
     { name: 'Seller B eBay client ID', ready: Boolean(process.env.EBAY_CLIENT_ID), detail: process.env.EBAY_CLIENT_ID ? 'Configured' : 'Set EBAY_CLIENT_ID' },
     { name: 'Seller B eBay client secret', ready: Boolean(process.env.EBAY_CLIENT_SECRET), detail: process.env.EBAY_CLIENT_SECRET ? 'Configured' : 'Set EBAY_CLIENT_SECRET' },
-    { name: 'Seller B OAuth token for REST drafts', ready: Boolean(process.env.SELLER_B_REFRESH_TOKEN || process.env.SELLER_B_ACCESS_TOKEN), detail: process.env.SELLER_B_REFRESH_TOKEN || process.env.SELLER_B_ACCESS_TOKEN ? 'Configured; must refresh successfully for REST Inventory API' : 'Set SELLER_B_REFRESH_TOKEN or SELLER_B_ACCESS_TOKEN; Auth’n’Auth tokens do not authorize REST Inventory API calls' },
+    { name: 'MongoDB OAuth storage', ready: mongoStorageReady, detail: mongoStorageDetail },
+    { name: 'Seller B OAuth token for REST drafts', ready: Boolean(sellerBRefreshToken || process.env.SELLER_B_ACCESS_TOKEN), detail: sellerBRefreshToken || process.env.SELLER_B_ACCESS_TOKEN ? 'Configured; must refresh successfully for REST Inventory API' : 'Connect Seller B with OAuth or set SELLER_B_REFRESH_TOKEN; Auth’n’Auth tokens do not authorize REST Inventory API calls' },
     { name: 'Seller B Auth’n’Auth token for Trading API view', ready: Boolean(process.env.SELLER_B_AUTH_TOKEN?.trim()), detail: process.env.SELLER_B_AUTH_TOKEN?.trim() ? 'Configured for legacy Trading API product viewing' : 'Set SELLER_B_AUTH_TOKEN to enable product viewing with Auth’n’Auth' },
     { name: 'Production eBay environment', ready: (process.env.EBAY_ENV || 'production').toLowerCase() === 'production', detail: (process.env.EBAY_ENV || 'production').toLowerCase() === 'production' ? 'Configured' : 'Set EBAY_ENV=production for this production listing workflow' },
     { name: 'Inventory API OAuth scope', ready: scopes.has('https://api.ebay.com/oauth/api_scope/sell.inventory'), detail: scopes.has('https://api.ebay.com/oauth/api_scope/sell.inventory') ? 'Configured' : 'Add sell.inventory to EBAY_OAUTH_SCOPES and reauthorize Seller B' },
@@ -51,7 +67,7 @@ async function getReadiness() {
   ];
   const canCheckSeller = Boolean(
     process.env.EBAY_CLIENT_ID && process.env.EBAY_CLIENT_SECRET &&
-    (process.env.SELLER_B_REFRESH_TOKEN || process.env.SELLER_B_ACCESS_TOKEN) &&
+    (sellerBRefreshToken || process.env.SELLER_B_ACCESS_TOKEN) &&
     scopes.has('https://api.ebay.com/oauth/api_scope/sell.account') &&
     (process.env.EBAY_ENV || 'production').toLowerCase() === 'production'
   );

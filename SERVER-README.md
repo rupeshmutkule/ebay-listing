@@ -60,4 +60,13 @@ npm install xlsx nodemon
 
 ## Seller B OAuth connection
 
-The listing page includes a **Connect Semi Equipment eBay** button. Set `PUBLIC_BASE_URL` to the public HTTPS origin of this app. Configure the Production eBay RuName accept URL to exactly `PUBLIC_BASE_URL/ebay-listings/oauth/callback`, and set `EBAY_RUNAME` to that RuName. The app starts OAuth authorization-code consent and exchanges the returned code on the server; it stores only the returned refresh token in the project `.env` as `SELLER_B_REFRESH_TOKEN`. Do not expose token values in logs or browser responses. A localhost URL is not reachable by a remote client; use the deployed HTTPS host or a temporary HTTPS tunnel and configure the matching RuName before asking the seller to connect.
+The listing page includes a **Connect Semi Equipment eBay** button. Set `PUBLIC_BASE_URL` to the public HTTPS origin of this app. Configure the Production eBay RuName accept URL to exactly `PUBLIC_BASE_URL/ebay-listings/oauth/callback`, and set `EBAY_RUNAME` to the RuName identifier. The app stores temporary OAuth state and an AES-256-GCM-encrypted Seller B refresh token in MongoDB, so it works across Vercel function instances without writing credentials to the deployment filesystem.
+
+Required server environment variables:
+- `MONGO_URI` — MongoDB Atlas connection URI for the `ebay` database. Add as a Vercel Secret; never commit it.
+- `EBAY_TOKEN_ENCRYPTION_KEY` — 64 hexadecimal characters (32 random bytes), stored as a Vercel Secret. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. Keep the same key for as long as encrypted tokens must remain readable; rotating it requires decrypting/re-encrypting existing records first.
+- `PUBLIC_BASE_URL=https://ebay-list.vercel.app`
+- `EBAY_RUNAME` — the exact RuName identifier from eBay Developer Portal, not the callback URL.
+- `EBAY_OAUTH_SCOPES` — space-separated eBay scopes granted at authorization, including `sell.inventory` and `sell.account`.
+
+MongoDB collections are created automatically: `ebay_oauth_states` (short-lived state documents with a TTL index) and `ebay_oauth_credentials` (encrypted Seller B refresh token). Configure Atlas Network Access and a database user for the app. Do not ask the seller to authorize until both required MongoDB secrets are set and the deployed **Connect Semi Equipment eBay** flow can start successfully. Never log token values, authorization codes, client secrets, or MongoDB URIs. A localhost URL is not reachable by a remote client; use the deployed HTTPS host and configure the matching RuName before asking the seller to connect.
