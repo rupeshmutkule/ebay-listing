@@ -57,3 +57,7 @@ npm install xlsx nodemon
 - Fixed token handling for eBay Inventory API
 - Token mode set to 'auto' with fallback for compatibility
 - Server configured to use Seller B by default (set `LISTING_SELLER=B` in .env)
+
+## Seller B OAuth connection
+
+The listing page includes a **Connect Semi Equipment eBay** button. Set `PUBLIC_BASE_URL` to the public HTTPS origin of this app. Configure the Production eBay RuName accept URL to exactly `PUBLIC_BASE_URL/ebay-listings/oauth/callback`, and set `EBAY_RUNAME` to that RuName. The app starts OAuth authorization-code consent and exchanges the returned code on the server; it stores only the returned refresh token in the project `.env` as `SELLER_B_REFRESH_TOKEN`. Do not expose token values in logs or browser responses. A localhost URL is not reachable by a remote client; use the deployed HTTPS host or a temporary HTTPS tunnel and configure the matching RuName before asking the seller to connect.

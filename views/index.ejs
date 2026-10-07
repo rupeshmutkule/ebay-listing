@@ -228,6 +228,7 @@
       <input id="csvFile" type="file" accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv" aria-label="Choose Excel or CSV product file">
       <button id="btnCreateDrafts">Upload &amp; Review Products</button>
       <button id="btnViewB" class="secondary">View products on Semi Equipment Store (Seller B)</button>
+      <button id="btnConnectB" class="secondary" type="button">Connect Semi Equipment eBay</button>
     </div>
   </section>
 
@@ -250,6 +251,7 @@ const tableWrap = document.getElementById('tableWrap');
 const jobSummary = document.getElementById('jobSummary');
 const csvFile = document.getElementById('csvFile');
 const btnCreateDrafts = document.getElementById('btnCreateDrafts');
+const btnConnectB = document.getElementById('btnConnectB');
 window.currentUploadFile = null;
 window.selectedListingRows = new Set();
 
@@ -570,6 +572,19 @@ document.getElementById('btnCreateDrafts').onclick = async () => {
     log(`Upload / validation failed: ${error.message}`, 'bad');
   } finally {
     btnCreateDrafts.disabled = false;
+  }
+};
+
+btnConnectB.onclick = async () => {
+  btnConnectB.disabled = true;
+  log('Preparing secure eBay authorization for Semi Equipment...', 'warn');
+  try {
+    const result = await callApi('/ebay-listings/oauth/authorize', { method: 'POST' });
+    log('Opening eBay sign-in. Confirm you are using the Semi Equipment seller account.', 'ok');
+    window.location.assign(result.authorizationUrl);
+  } catch (error) {
+    log(`Could not start eBay authorization: ${error.message}`, 'bad');
+    btnConnectB.disabled = false;
   }
 };
 
