@@ -1,4 +1,4 @@
-const { sellerA, sellerB } = require('../config/ebayAuth');
+const { sellerA, sellerB, sellerBAuthToken } = require('../config/ebayAuth');
 const tradingApi = require('./tradingapi');
 const { getSellerPolicies } = require('./accountApi');
 const checkpoint = require('./checkpoint');
@@ -457,7 +457,11 @@ async function listSellerAItems() {
 }
 
 async function listSellerBItems() {
-  const tokenB = await sellerB.getToken();
+  const tokenB = sellerBAuthToken
+    ? { type: 'authn-auth', token: sellerBAuthToken }
+    : await sellerB.getToken().catch((error) => {
+      throw new Error(`Seller B Trading API OAuth failed: ${error.message}. Configure SELLER_B_AUTH_TOKEN to use the Seller B Auth'n'Auth token for product viewing.`);
+    });
   const first = await tradingApi.getSellerList(tokenB, { pageNumber: 1 });
   let allItems = first.items;
 

@@ -9,7 +9,7 @@ const OAUTH_URL =
     : 'https://api.ebay.com/identity/v1/oauth2/token');
 
 const GLOBAL_TOKEN_MODE = (process.env.EBAY_TOKEN_MODE || 'auto').toLowerCase();
-const ALLOW_STATIC_FALLBACK = String(process.env.EBAY_ALLOW_STATIC_TOKEN_FALLBACK || 'true').toLowerCase() !== 'false';
+const ALLOW_STATIC_FALLBACK = String(process.env.EBAY_ALLOW_STATIC_TOKEN_FALLBACK || 'false').toLowerCase() === 'true';
 const OAUTH_SCOPES = (process.env.EBAY_OAUTH_SCOPES || [
   'https://api.ebay.com/oauth/api_scope/sell.inventory',
   'https://api.ebay.com/oauth/api_scope/sell.account'
@@ -90,9 +90,11 @@ class SellerTokenManager {
       console.log(`[auth] Refreshed token for ${this.label} via ${EBAY_ENV} endpoint, expires in ${res.data.expires_in}s`);
       return this.accessToken;
     } catch (err) {
-      const detail = err.response ? JSON.stringify(err.response.data) : err.message;
       const errorCode = err.response?.data?.error;
       const errorDescription = err.response?.data?.error_description || '';
+      const detail = err.response
+        ? `HTTP ${err.response.status}${errorCode ? ` ${errorCode}` : ''}${errorDescription ? `: ${errorDescription}` : `: ${JSON.stringify(err.response.data || {})}`}`
+        : err.message;
 
       if (
         this.tokenMode === 'auto' &&
@@ -134,4 +136,8 @@ const sellerB = new SellerTokenManager('Seller B', {
   ruName: process.env.EBAY_RUNAME
 });
 
-module.exports = { sellerA, sellerB };
+// Auth'n'Auth tokens are accepted by the legacy Trading API only. Keep this
+// separate from the OAuth refresh/access tokens used by REST Inventory APIs.
+const sellerBAuthToken = (process.env.SELLER_B_AUTH_TOKEN || '').trim();
+
+module.exports = { sellerA, sellerB, sellerBAuthToken };

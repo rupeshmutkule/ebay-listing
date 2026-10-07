@@ -5,7 +5,7 @@ const requireApiKey = require('../middleware/requireApiKey');
 
 router.get('/', (req, res) => {
   res.render('index', {
-    title: 'eBay Migration Tool - Bridge Tronic Global -> Semi Equipment',
+    title: 'IBM eBay Draft Listings - Semi Equipment',
     apiKey: process.env.MIGRATION_TOOL_API_KEY || process.env.API_KEY || process.env.SHARED_SECRET || ''
   });
 });

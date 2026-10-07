@@ -37,22 +37,30 @@ async function sleep(ms) {
 }
 
 // Generic Trading API caller with exponential backoff on throttling/5xx.
-// `oauthToken` is the seller's current OAuth access token (from ebayAuth.js).
-async function callTradingApi(callName, xmlBody, oauthToken, attempt = 1) {
-  if (!oauthToken) {
-    throw new Error(`Missing OAuth token for ${callName}`);
+// A string is an OAuth access token; { type: 'authn-auth', token } is a legacy
+// Auth'n'Auth user token carried in RequesterCredentials XML.
+async function callTradingApi(callName, xmlBody, auth, attempt = 1) {
+  const isAuthnAuth = auth && typeof auth === 'object' && auth.type === 'authn-auth';
+  const userToken = isAuthnAuth ? auth.token : auth;
+  if (!userToken) {
+    throw new Error(`Missing user authorization token for ${callName}`);
   }
 
   const headers = {
     'X-EBAY-API-SITEID': SITE_ID,
     'X-EBAY-API-COMPATIBILITY-LEVEL': COMPATIBILITY_LEVEL,
     'X-EBAY-API-CALL-NAME': callName,
-    'X-EBAY-API-IAF-TOKEN': oauthToken,
     'Content-Type': 'text/xml'
   };
+  if (!isAuthnAuth) headers['X-EBAY-API-IAF-TOKEN'] = userToken;
+
+  const authXml = isAuthnAuth
+    ? `<RequesterCredentials><eBayAuthToken>${escapeXml(userToken)}</eBayAuthToken></RequesterCredentials>`
+    : '';
 
   const envelope = `<?xml version="1.0" encoding="utf-8"?>
 <${callName}Request xmlns="urn:ebay:apis:eBLBaseComponents">
+  ${authXml}
   ${xmlBody}
 </${callName}Request>`;
 
@@ -72,7 +80,7 @@ async function callTradingApi(callName, xmlBody, oauthToken, attempt = 1) {
         const backoff = Math.min(2000 * 2 ** attempt, 30000);
         console.warn(`[${callName}] throttled, retrying in ${backoff}ms (attempt ${attempt})`);
         await sleep(backoff);
-        return callTradingApi(callName, xmlBody, oauthToken, attempt + 1);
+        return callTradingApi(callName, xmlBody, auth, attempt + 1);
       }
       const msg = errors.map(e => e && e.LongMessage).filter(Boolean).join('; ');
       throw new Error(`${callName} failed: ${msg || JSON.stringify(errors)}`);
@@ -86,7 +94,7 @@ async function callTradingApi(callName, xmlBody, oauthToken, attempt = 1) {
       const backoff = Math.min(2000 * 2 ** attempt, 30000);
       console.warn(`[${callName}] transient error (${status || err.code}), retrying in ${backoff}ms`);
       await sleep(backoff);
-      return callTradingApi(callName, xmlBody, oauthToken, attempt + 1);
+      return callTradingApi(callName, xmlBody, auth, attempt + 1);
     }
     throw err;
   }

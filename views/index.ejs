@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title><%= title %></title>
+<title>eBay Product Listing</title>
 <style>
   :root {
     color-scheme: light;
@@ -46,8 +46,8 @@
     margin-bottom: 18px;
   }
 
-  h1 {
-    margin: 0 0 0px;
+  h3 {
+    margin: 0;
     font-size: clamp(24px, 3vw, 36px);
     letter-spacing: -0.03em;
   }
@@ -65,6 +65,21 @@
     gap: 10px;
     margin: 18px 0;
   }
+
+  .file-picker {
+    display: inline-flex;
+    align-items: center;
+    margin: 0;
+    padding: 11px 16px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: #fff;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  #csvFile { max-width: 260px; align-self: center; }
+  h2 { margin: 0 0 12px; font-size: 19px; }
 
   button {
     appearance: none;
@@ -116,6 +131,7 @@
     font-size: 14px;
     line-height: 1.45;
     max-height: 340px;
+    min-height: 90px;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -195,39 +211,34 @@
     .shell { padding: 16px; }
     .hero, .panel { padding: 16px; border-radius: 16px; }
     button { width: 100%; }
+    .file-picker { justify-content: center; width: 100%; }
+    #csvFile { max-width: 100%; width: 100%; }
   }
 </style>
 </head>
 <body>
 <div class="shell">
   <section class="hero">
-    <h1><%= title %></h1>
-    <!-- <p class="lede">
-      Paste eBay Item Numbers or select products from Bridge Tronic Global, then migrate them to Semi Equipment.
-      The server now runs each migration as a background job, polls progress by job ID, and stops
-      duplicate submissions for the same batch while a run is active.
-    </p> -->
+    <h3>eBay Product Listing</h3>
   </section>
 
   <section class="panel">
     <div class="toolbar">
-      <button id="btnFetch">1. Fetch products from Bridge Tronic Global</button>
-      <button id="btnMigrate" class="danger">2. Migrate selected to Semi Equipment</button>
-      <button id="btnViewB" class="secondary">3. View products live on Semi Equipment</button>
-      <button id="btnStatus" class="secondary">Check migration progress</button>
-      <button id="btnReport" class="secondary">Download Migration report (CSV)</button>
+      <label for="csvFile">Product file:</label>
+      <input id="csvFile" type="file" accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv" aria-label="Choose Excel or CSV product file">
+      <button id="btnCreateDrafts">Upload &amp; Review Products</button>
+      <button id="btnViewB" class="secondary">View products on Semi Equipment Store (Seller B)</button>
     </div>
-
-    <label for="manualIds">Or paste specific Item Numbers, separated by commas or new lines:</label>
-    <textarea id="manualIds" placeholder="123456789012, 123456789013"></textarea>
-    <div class="summary" id="authSummary"></div>
   </section>
 
   <section class="panel">
+    <h2>Activity and listing logs</h2>
+    <div class="summary" id="jobSummary"></div>
     <div class="status" id="statusBox"></div>
   </section>
 
   <section class="panel">
+    <h2 id="tableTitle">Product review</h2>
     <div id="tableWrap"></div>
   </section>
 </div>
@@ -236,13 +247,11 @@
 const apiKey = <%- JSON.stringify(apiKey) %>;
 const statusBox = document.getElementById('statusBox');
 const tableWrap = document.getElementById('tableWrap');
-const manualIdsBox = document.getElementById('manualIds');
-const authSummary = document.getElementById('authSummary');
-const btnMigrate = document.getElementById('btnMigrate');
-
-authSummary.textContent = apiKey
-  ? 'API key loaded from the server for this session.'
-  : 'No app key configured. Running in local mode without the extra header.';
+const jobSummary = document.getElementById('jobSummary');
+const csvFile = document.getElementById('csvFile');
+const btnCreateDrafts = document.getElementById('btnCreateDrafts');
+window.currentUploadFile = null;
+window.selectedListingRows = new Set();
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, ch => ({
@@ -259,23 +268,26 @@ function log(msg, cls) {
   line.className = `log-line ${cls ? `log-${cls}` : ''}`.trim();
   line.textContent = msg;
   statusBox.prepend(line);
+  while (statusBox.children.length > 40) statusBox.removeChild(statusBox.lastElementChild);
+}
+
+async function loadReadiness() {
+  try {
+    const data = await callApi('/ebay-listings/readiness');
+    const { readiness } = data;
+    const missing = readiness.checks.filter(check => !check.ready);
+    jobSummary.textContent = readiness.ready
+      ? ''
+      : `Setup needed: ${missing.map(check => `${check.name} — ${check.detail}`).join('; ')}`;
+    if (missing.length) log(jobSummary.textContent, 'warn');
+  } catch (error) {
+    jobSummary.textContent = 'Listing service is not available.';
+    log('Listing service routes are not loaded. Restart the Express app, then refresh this page.', 'warn');
+  }
 }
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function getManualIds() {
-  return manualIdsBox.value.split(/[\n,]/).map(s => s.trim()).filter(Boolean);
-}
-
-function getCheckedIds() {
-  return Array.from(document.querySelectorAll('.row-check:checked')).map(cb => cb.dataset.itemid);
-}
-
-function getSelectedIds() {
-  const manual = getManualIds();
-  return manual.length ? manual : getCheckedIds();
 }
 
 async function callApi(url, options = {}) {
@@ -284,9 +296,9 @@ async function callApi(url, options = {}) {
     ...(apiKey ? { 'X-Api-Key': apiKey } : {})
   };
 
-  const fullUrl = `/ebay-store-migration${url}`;
-  const res = await fetch(fullUrl, { ...options, headers });
+  const res = await fetch(url, { ...options, headers });
   const text = await res.text();
+  const contentType = res.headers.get('content-type') || '';
   let data = {};
   try {
     data = text ? JSON.parse(text) : {};
@@ -295,6 +307,9 @@ async function callApi(url, options = {}) {
   }
 
   if (!res.ok) {
+    if (contentType.includes('text/html') || /^\s*<!doctype html/i.test(text)) {
+      throw new Error(res.status === 404 ? 'Listing service route is not loaded. Restart the Express app.' : `Server returned ${res.status}.`);
+    }
     throw new Error(data.error ? JSON.stringify(data.error) : `Request failed (${res.status})`);
   }
 
@@ -404,106 +419,178 @@ async function pollJob(jobId) {
   }
 }
 
-document.getElementById('btnFetch').onclick = async () => {
-  log('Fetching products from Bridge Tronic Global...');
-  try {
-    const data = await callApi('/api/seller-a/products');
-    log(`Found ${data.count} products on Bridge Tronic Global`, 'ok');
-    renderTable(data.products);
-  } catch (err) {
-    log(`Fetch failed: ${err.message}`, 'bad');
-  }
-};
-
-btnMigrate.onclick = async () => {
-  const itemIds = getSelectedIds();
-  if (!itemIds.length) {
-    return log('Select products or paste Item Numbers first.', 'bad');
-  }
-
-  if (!confirm(`Migrate ${itemIds.length} product(s) to Semi Equipment and remove them from Bridge Tronic Global?`)) {
+function renderCsvRows(rows) {
+  if (!rows.length) {
+    tableWrap.innerHTML = '<p>No product rows found in the CSV.</p>';
     return;
   }
-
-  btnMigrate.disabled = true;
-  log(`Submitting ${itemIds.length} product(s) for migration...`);
-
-  try {
-    const data = await callApi('/api/migrate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ itemIds })
+  const rowHtml = rows.map(row => {
+    const status = row.status || (row.issues?.length ? 'needs attention' : row.policyValidationPending ? 'Excel data ready' : 'ready');
+    const details = row.issues?.length ? row.issues.join('; ') : row.policyValidationPending ? 'Seller B shipping and listing policies checked when drafts are submitted' : `Shipping selected: $${row.selectedShipping ?? '—'}${row.shippingDifference ? ` (difference $${row.shippingDifference})` : ''}`;
+    const offer = row.offerId ? `Offer ${row.offerId} (unpublished)` : '';
+    const selectable = !(row.issues?.length) && !['draft', 'skipped', 'failed'].includes(row.status);
+    return `<tr>
+      <td><input type="checkbox" class="listing-row-check" data-row-number="${escapeHtml(row.rowNumber)}" ${selectable ? '' : 'disabled'} ${window.selectedListingRows.has(Number(row.rowNumber)) ? 'checked' : ''} aria-label="Select ${escapeHtml(row.title || row.assetNumber || `row ${row.rowNumber}`)}"></td>
+      <td>${escapeHtml(row.rowNumber)}</td>
+      <td>${escapeHtml(row.assetNumber)}</td>
+      <td>${escapeHtml(row.title)}</td>
+      <td>$${escapeHtml(row.askingPrice)}</td>
+      <td>$${escapeHtml(row.spreadsheetShipping ?? '—')}</td>
+      <td>${escapeHtml(status)}${offer ? `<br>${escapeHtml(offer)}` : ''}</td>
+      <td>${escapeHtml(details)}${row.error ? `<br>${escapeHtml(JSON.stringify(row.error))}` : ''}${row.reason ? `<br>${escapeHtml(row.reason)}` : ''}</td>
+    </tr>`;
+  }).join('');
+  tableWrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th><input type="checkbox" id="selectAllReady" aria-label="Select all ready products"></th><th>Excel row</th><th>Asset #</th><th>Draft title</th><th>Price</th><th>Sheet shipping</th><th>Status</th><th>Details / missing data</th></tr></thead><tbody>${rowHtml}</tbody></table></div>`;
+  const checks = [...tableWrap.querySelectorAll('.listing-row-check')];
+  checks.forEach(check => check.addEventListener('change', () => {
+    const rowNumber = Number(check.dataset.rowNumber);
+    if (check.checked) window.selectedListingRows.add(rowNumber);
+    else window.selectedListingRows.delete(rowNumber);
+    document.getElementById('selectAllReady').checked = checks.filter(item => !item.disabled).every(item => item.checked);
+  }));
+  document.getElementById('selectAllReady').onchange = event => {
+    checks.filter(item => !item.disabled).forEach(item => {
+      item.checked = event.target.checked;
+      const rowNumber = Number(item.dataset.rowNumber);
+      if (item.checked) window.selectedListingRows.add(rowNumber);
+      else window.selectedListingRows.delete(rowNumber);
     });
+  };
+}
 
-    if (data.duplicate) {
-      log(`Matching job already running: ${data.job.jobId}`, 'warn');
-    } else {
-      log(`Job started: ${data.job.jobId}`, 'ok');
+function renderProducts(products) {
+  if (!products.length) {
+    tableWrap.innerHTML = '<p>No live products were returned for Seller B.</p>';
+    return;
+  }
+  const rows = products.map(product => `<tr>
+    <td>${escapeHtml(product.itemId)}</td>
+    <td>${escapeHtml(product.sku || '')}</td>
+    <td>${escapeHtml(product.title || '')}</td>
+    <td>${escapeHtml(product.price ?? '')}</td>
+    <td>${escapeHtml(product.quantity ?? '')}</td>
+    <td>${escapeHtml(product.status || '')}</td>
+    <td><a href="https://www.ebay.com/itm/${encodeURIComponent(product.itemId)}" target="_blank" rel="noopener">View listing</a></td>
+  </tr>`).join('');
+  tableWrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th>eBay item</th><th>SKU</th><th>Title</th><th>Price</th><th>Qty</th><th>Status</th><th>Link</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function updateSummary(preview) {
+  const blockedByLocation = !preview.merchantLocationKeyConfigured;
+  const setupCount = preview.setupIssues?.length || 0;
+  jobSummary.textContent = preview.localOnly
+    ? `${preview.total} rows loaded · ${preview.eligible} have required Excel data · ${preview.skipped} need attention · ${preview.bestOfferEligible} above $2,000 · Seller B checks run when drafts are submitted`
+    : `${preview.total} rows · ${preview.eligible} data/shipping ready · ${preview.skipped} need attention · ${preview.bestOfferEligible} ready items over $2,000${setupCount ? ` · ${setupCount} account setup issue(s)` : ''}${blockedByLocation ? ' · Missing inventory location key' : ''}`;
+  (preview.setupIssues || []).forEach(issue => log(`Account setup issue: ${typeof issue === 'string' ? issue : JSON.stringify(issue)}`, 'bad'));
+}
+
+async function pollDraftJob(jobId) {
+  let lastCount = 0;
+  while (true) {
+    const data = await callApi(`/ebay-listings/drafts/${encodeURIComponent(jobId)}`);
+    const job = data.job;
+    jobSummary.textContent = `Draft job ${job.jobId}: ${job.status} · ${job.completed}/${job.total} processed · ${job.drafted} drafts · ${job.skipped} skipped · ${job.failed} failed`;
+    if (job.results.length > lastCount) {
+      lastCount = job.results.length;
+      const resultsByRow = new Map(job.results.map(result => [result.rowNumber, result]));
+      renderCsvRows(window.currentCsvPreview.rows.map(row => resultsByRow.get(row.rowNumber) || row));
+    }
+    if (['completed', 'completed_with_errors', 'failed'].includes(job.status)) {
+      if (job.error) log(`Job stopped: ${JSON.stringify(job.error)}`, 'bad');
+      log(`Finished: ${job.drafted} drafts, ${job.skipped} skipped, ${job.failed} failed.`, job.failed ? 'warn' : 'ok');
+      return;
+    }
+    await sleep(1500);
+  }
+}
+
+document.getElementById('btnCreateDrafts').onclick = async () => {
+  const file = csvFile.files[0];
+  if (!file) return log('Choose an Excel workbook (.xlsx or .xls) or CSV file first.', 'bad');
+  const extension = file.name.toLowerCase().split('.').pop();
+  if (!['csv', 'xlsx', 'xls'].includes(extension)) return log('Choose an .xlsx, .xls, or .csv file.', 'bad');
+  if (file.size > 10 * 1024 * 1024) return log('File is larger than the 10 MB upload limit.', 'bad');
+
+  btnCreateDrafts.disabled = true;
+  const isCsv = extension === 'csv';
+  const previewUrl = isCsv ? '/ebay-listings/preview-csv' : '/ebay-listings/preview-workbook';
+  const contentType = isCsv ? 'text/csv' : extension === 'xls' ? 'application/vnd.ms-excel' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const draftsUrl = `/ebay-listings/drafts-selected?rowNumbers=${encodeURIComponent([...window.selectedListingRows].join(','))}`;
+  try {
+    const fileBody = isCsv ? await file.text() : await file.arrayBuffer();
+    if (window.currentUploadFile === file && window.currentCsvPreview) {
+      const selectedRows = window.currentCsvPreview.rows.filter(row => window.selectedListingRows.has(Number(row.rowNumber)) && !row.issues?.length);
+      if (!selectedRows.length) {
+        log('Select one or more ready products in the review table first.', 'warn');
+        return;
+      }
+      const confirmed = confirm(`Create unpublished drafts for the ${selectedRows.length} selected products? Nothing will be published for sale.`);
+      if (!confirmed) return log('Draft creation cancelled.', 'warn');
+      log(`Creating drafts for ${selectedRows.length} selected products...`, 'warn');
+      const started = await callApi(draftsUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': contentType },
+        body: fileBody
+      });
+      log(`Draft job started for selected products: ${started.job.jobId}`, 'ok');
+      await pollDraftJob(started.job.jobId);
+      return;
     }
 
-    await pollJob(data.job.jobId);
-    log('Migration job finished.', 'ok');
-  } catch (err) {
-    log(`Migration failed: ${err.message}`, 'bad');
+    document.getElementById('tableTitle').textContent = 'Product review';
+    tableWrap.innerHTML = '<p>Reading and validating product rows...</p>';
+    log(`Validating ${file.name} before any eBay changes...`, 'warn');
+    const previewResponse = await callApi(previewUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': contentType },
+      body: fileBody
+    });
+    const preview = previewResponse.preview;
+    window.currentUploadFile = file;
+    window.currentCsvPreview = preview;
+    window.selectedListingRows = new Set();
+    btnCreateDrafts.textContent = 'Create Drafts for Selected';
+    updateSummary(preview);
+    renderCsvRows(preview.rows);
+    log(`Loaded ${preview.total} product rows from ${file.name}. Select the ready rows you want to list.`, preview.skipped ? 'warn' : 'ok');
+    if (!preview.merchantLocationKeyConfigured) {
+      log('Drafts are blocked until IBM_MERCHANT_LOCATION_KEY is configured for ZIP 85004.', 'bad');
+      return;
+    }
+    if (preview.setupIssues?.length) {
+      log('Draft creation is blocked until the account setup issues above are resolved.', 'bad');
+      return;
+    }
+    if (!preview.eligible) {
+      log('No rows are ready. Fix the CSV or eBay policies shown in the Details column, then upload again.', 'bad');
+      return;
+    }
+    log('Select products in the table, then click “Create Drafts for Selected”.', 'ok');
+  } catch (error) {
+    log(`Upload / validation failed: ${error.message}`, 'bad');
   } finally {
-    btnMigrate.disabled = false;
+    btnCreateDrafts.disabled = false;
   }
 };
 
 document.getElementById('btnViewB').onclick = async () => {
-  log('Fetching products from Semi Equipment...');
+  const viewButton = document.getElementById('btnViewB');
+  viewButton.disabled = true;
+  log('Loading live products from Semi Equipment Store using Seller B credentials...', 'warn');
   try {
-    const data = await callApi('/api/seller-b/products');
-    log(`Found ${data.count} products on Semi Equipment`, 'ok');
-    renderTable(data.products);
-  } catch (err) {
-    log(`Fetch failed: ${err.message}`, 'bad');
+    const data = await callApi('/ebay-store-migration/api/seller-b/products');
+    document.getElementById('tableTitle').textContent = 'Live products on Semi Equipment Store (Seller B)';
+    renderProducts(data.products || []);
+    log(`Seller B returned ${data.count} live products.`, 'ok');
+  } catch (error) {
+    const expired = /hard expired|invalid access token|invalid_grant/i.test(error.message);
+    log(expired ? 'Seller B authorization expired. Reauthorize Seller B, then try again.' : `Seller B product view failed: ${error.message}`, 'bad');
+  } finally {
+    viewButton.disabled = false;
   }
 };
 
-document.getElementById('btnReport').onclick = async () => {
-  log('Generating migration link report, please wait...', 'warn');
-  try {
-    const headers = apiKey ? { 'X-Api-Key': apiKey } : {};
-    const res = await fetch('/ebay-store-migration/api/migration-report/csv', { headers });
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(err || `Request failed (${res.status})`);
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'migration-link-report.csv';
-    a.click();
-    URL.revokeObjectURL(url);
-    log('Migration link report downloaded.', 'ok');
-  } catch (err) {
-    log(`Report download failed: ${err.message}`, 'bad');
-  }
-};
-
-document.getElementById('btnStatus').onclick = async () => {
-  try {
-    const data = await callApi('/api/migration-status');
-    const entries = Object.entries(data.checkpoint);
-    log(`Checkpoint has ${entries.length} tracked item(s)`, 'ok');
-
-    entries.forEach(([itemId, info]) => {
-      const cls = info.status === 'removed_from_a' ? 'ok' : info.status === 'failed' ? 'bad' : 'warn';
-      log(`  ${itemId}: ${info.status}${info.newItemIdOnB ? ' -> ' + info.newItemIdOnB : ''}`, cls);
-    });
-
-    if (Array.isArray(data.jobs) && data.jobs.length) {
-      log(`Active or recent jobs: ${data.jobs.length}`, 'ok');
-      data.jobs.forEach(job => {
-        renderJob(job, '  Job:');
-      });
-    }
-  } catch (err) {
-    log(`Status check failed: ${err.message}`, 'bad');
-  }
-};
+loadReadiness();
 </script>
 </body>
 </html>
