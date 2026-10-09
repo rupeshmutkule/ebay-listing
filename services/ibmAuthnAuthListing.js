@@ -27,8 +27,7 @@ function shippingServiceXml(service, amount) {
     ShippingServiceOptions: {
       ShippingService: service,
       ShippingServicePriority: 1,
-      ShippingServiceCost: { '#text': amount.toFixed(2), '@_currencyID': 'USD' },
-      ShippingServiceAdditionalCost: { '#text': '0.00', '@_currencyID': 'USD' }
+      ShippingServiceCost: { '#text': amount.toFixed(2), '@_currencyID': 'USD' }
     }
   };
 }
@@ -54,6 +53,21 @@ async function findActiveSku(sku) {
     all.push(...next.items);
   }
   return all.find((item) => clean(item.SKU) === sku) || null;
+}
+let domesticFlatShippingServicesCache = { expiresAt: 0, values: [] };
+async function getDomesticFlatShippingServices() {
+  if (domesticFlatShippingServicesCache.expiresAt > Date.now()) return domesticFlatShippingServicesCache.values;
+  const details = await tradingApi.getShippingServiceDetails({ type: 'authn-auth', token: sellerBAuthToken });
+  domesticFlatShippingServicesCache = {
+    expiresAt: Date.now() + 60 * 60 * 1000,
+    values: details.filter((service) => {
+      const valid = service.ValidForSellingFlow === true || String(service.ValidForSellingFlow).toLowerCase() === 'true';
+      const international = service.InternationalService === true || String(service.InternationalService).toLowerCase() === 'true';
+      const serviceTypes = Array.isArray(service.ServiceType) ? service.ServiceType : [service.ServiceType];
+      return valid && !international && serviceTypes.includes('Flat');
+    }).map((service) => clean(service.ShippingService)).filter(Boolean)
+  };
+  return domesticFlatShippingServicesCache.values;
 }
 function toTradingItem(row) {
   const title = [row.make, row.model, row.equipmentType].map(clean).filter(Boolean).join(' ').replace(/\s+/g, ' ').slice(0, 80).trim();
@@ -94,7 +108,7 @@ function toTradingItem(row) {
 async function getReadiness() {
   const checks = [
     { name: 'Semi Equipment Auth’n’Auth token', ready: Boolean(sellerBAuthToken), detail: sellerBAuthToken ? 'Configured in server environment' : 'Set SELLER_B_AUTH_TOKEN' },
-    { name: 'Domestic shipping service', ready: Boolean(clean(process.env.IBM_SHIPPING_SERVICE)) && !/^freight$/i.test(clean(process.env.IBM_SHIPPING_SERVICE)), detail: !clean(process.env.IBM_SHIPPING_SERVICE) ? 'Set IBM_SHIPPING_SERVICE to the seller-approved domestic service code' : /^freight$/i.test(clean(process.env.IBM_SHIPPING_SERVICE)) ? 'Current service is Freight; numeric-shipping queue items need the seller-approved domestic service code' : `${clean(process.env.IBM_SHIPPING_SERVICE)}; verify this code is enabled for Seller B and category 40004` },
+    { name: 'Domestic shipping service', ready: Boolean(clean(process.env.IBM_SHIPPING_SERVICE)) && !/^freight$/i.test(clean(process.env.IBM_SHIPPING_SERVICE)), detail: !clean(process.env.IBM_SHIPPING_SERVICE) ? 'Set IBM_SHIPPING_SERVICE to the exact domestic eBay ShippingService code' : /^freight$/i.test(clean(process.env.IBM_SHIPPING_SERVICE)) ? 'Freight is not allowed for these numeric-shipping rows' : `Configured: ${clean(process.env.IBM_SHIPPING_SERVICE)}` },
     { name: 'Payment profile', ready: Boolean(clean(process.env.IBM_PAYMENT_POLICY_ID)), detail: clean(process.env.IBM_PAYMENT_POLICY_ID) ? 'Configured; still must be accepted by eBay for this seller' : 'Set IBM_PAYMENT_POLICY_ID to the seller’s managed-payment profile ID' },
     { name: 'Production category', ready: CATEGORY_ID === '40004', detail: `Category ${CATEGORY_ID}` }
   ];
@@ -107,6 +121,20 @@ async function getReadiness() {
     } catch (error) {
       checks.push({ name: 'Trading API authorization', ready: false, detail: error.message || 'Could not verify Auth’n’Auth token' });
     }
+    if (clean(process.env.IBM_SHIPPING_SERVICE) && !/^freight$/i.test(clean(process.env.IBM_SHIPPING_SERVICE))) {
+      try {
+        const services = await getDomesticFlatShippingServices();
+        const configuredService = clean(process.env.IBM_SHIPPING_SERVICE);
+        const supported = services.includes(configuredService);
+        checks.push({
+          name: 'Shipping service accepted by eBay',
+          ready: supported,
+          detail: supported ? `${configuredService} is valid for domestic flat shipping on eBay US` : `${configuredService} is not a valid domestic flat-rate service code for this seller/site; use an exact valid ShippingService code from eBay`
+        });
+      } catch (error) {
+        checks.push({ name: 'Shipping service accepted by eBay', ready: false, detail: `Could not verify shipping code with eBay: ${error.message || 'Trading API lookup failed'}` });
+      }
+    }
   } else {
     checks.push({ name: 'Trading API authorization', ready: false, detail: 'Token is not configured' });
   }
@@ -118,6 +146,11 @@ async function publishSelected(rows) {
   if (!clean(process.env.IBM_SHIPPING_SERVICE)) throw new Error('Set IBM_SHIPPING_SERVICE to a valid domestic eBay Trading API service code before publishing.');
   if (/^freight$/i.test(clean(process.env.IBM_SHIPPING_SERVICE))) throw new Error('IBM_SHIPPING_SERVICE is set to Freight. Set it to the seller-approved domestic service for numeric-shipping products before publishing.');
   if (!clean(process.env.IBM_PAYMENT_POLICY_ID)) throw new Error('Set IBM_PAYMENT_POLICY_ID to the Semi Equipment seller payment profile ID.');
+  const serviceCode = clean(process.env.IBM_SHIPPING_SERVICE);
+  const supportedShippingServices = await getDomesticFlatShippingServices();
+  if (!supportedShippingServices.includes(serviceCode)) {
+    throw new Error(`eBay does not recognize IBM_SHIPPING_SERVICE=${serviceCode} as a valid domestic flat-rate service for this seller. Use an exact service code returned by eBay GeteBayDetails.`);
+  }
   if (!Array.isArray(rows) || !rows.length) throw new Error('Select at least one product.');
   if (rows.length > MAX_BATCH_SIZE) throw new Error(`Publish at most ${MAX_BATCH_SIZE} items per request; use small batches to review each result.`);
   const results = [];

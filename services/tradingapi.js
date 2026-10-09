@@ -82,7 +82,11 @@ async function callTradingApi(callName, xmlBody, auth, attempt = 1) {
         await sleep(backoff);
         return callTradingApi(callName, xmlBody, auth, attempt + 1);
       }
-      const msg = errors.map(e => e && e.LongMessage).filter(Boolean).join('; ');
+      const msg = errors.map(e => {
+        if (!e) return '';
+        const detail = e.LongMessage || e.ShortMessage || '';
+        return `${e.ErrorCode ? `eBay ${e.ErrorCode}: ` : ''}${detail}`;
+      }).filter(Boolean).join('; ');
       throw new Error(`${callName} failed: ${msg || JSON.stringify(errors)}`);
     }
 
@@ -130,6 +134,15 @@ async function getSellerList(oauthToken, { pageNumber = 1, entriesPerPage = 200 
     totalPages: Number(root.ActiveList?.PaginationResult?.TotalNumberOfPages || 1),
     totalEntries: Number(root.ActiveList?.PaginationResult?.TotalNumberOfEntries || items.length)
   };
+}
+
+// Get the site's current Trading API shipping codes; a code must be enabled
+// for selling and support flat-rate shipping before it can be used in a listing.
+async function getShippingServiceDetails(auth) {
+  const body = '<DetailName>ShippingServiceDetails</DetailName>';
+  const root = await callTradingApi('GeteBayDetails', body, auth);
+  const value = root.ShippingServiceDetails;
+  return value ? (Array.isArray(value) ? value : [value]) : [];
 }
 
 // ---------- AddFixedPriceItem: create the listing on Seller B ----------
@@ -226,6 +239,7 @@ function collectItemSpecifics(item) {
 module.exports = {
   getItem,
   getSellerList,
+  getShippingServiceDetails,
   addFixedPriceItem,
   endItem
 };
