@@ -241,7 +241,7 @@ function validateRow(row) {
   if (!row.model) issues.push('missing Model');
   if (!row.equipmentType) issues.push('missing Equipment_Type');
   if (!(row.askingPrice > 0)) issues.push('Asking Price must be positive');
-  if (row.shippingAmount == null) issues.push(`Shipping Price is not numeric (${row.shippingText || 'blank'}); freight needs a manually approved amount`);
+  if (row.shippingAmount == null) issues.push(`Freight/blank Shipping Price is not numeric (${row.shippingText || 'blank'}); excluded from this live-publish batch`);
   if (!row.photoUrls?.length) issues.push('add at least one product photo URL before live publishing');
   return issues;
 }
@@ -388,6 +388,8 @@ function previewSummary(preview) {
   return {
     total: preview.length,
     eligible: eligible.length,
+    shippingReady: preview.filter((item) => item.spreadsheetShipping != null).length,
+    freightExcluded: preview.filter((item) => item.spreadsheetShipping == null && /freight/i.test(String(item.shippingText || ''))).length,
     skipped: preview.length - eligible.length,
     bestOfferEligible: eligible.filter((item) => item.offerEnabled).length,
     rows: preview

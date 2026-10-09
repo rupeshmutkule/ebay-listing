@@ -36,6 +36,14 @@ async function getCollections() {
   };
 }
 
+async function getListingQueueCollection() {
+  const client = await getClient();
+  const collection = client.db().collection('ebay_listing_queue');
+  await collection.createIndex({ queueKey: 1 }, { unique: true });
+  await collection.createIndex({ status: 1, updatedAt: -1 });
+  return collection;
+}
+
 function encryptionKey() {
   const value = (process.env.EBAY_TOKEN_ENCRYPTION_KEY || '').trim();
   if (!/^[a-f0-9]{64}$/i.test(value)) {
@@ -104,5 +112,6 @@ module.exports = {
   consumeOAuthState,
   saveSellerBRefreshToken,
   getSellerBRefreshToken,
+  getListingQueueCollection,
   checkMongoStorage
 };

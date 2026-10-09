@@ -7,14 +7,11 @@ const parseCsvBody = express.text({ type: ['text/csv', 'application/csv', 'text/
 const parseWorkbookBody = express.raw({ type: ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'], limit: '10mb' });
 
 router.get('/readiness', requireApiKey, controller.readiness);
-router.get('/preview', requireApiKey, controller.preview);
-router.post('/drafts', requireApiKey, controller.createDrafts);
-router.post('/preview-csv', requireApiKey, parseCsvBody, controller.previewCsv);
-router.post('/drafts-csv', requireApiKey, parseCsvBody, controller.createDraftsFromCsv);
-router.post('/preview-workbook', requireApiKey, parseWorkbookBody, controller.previewWorkbook);
-router.post('/drafts-workbook', requireApiKey, parseWorkbookBody, controller.createDraftsFromWorkbook);
-router.post('/drafts-selected', requireApiKey, parseCsvBody, parseWorkbookBody, controller.createSelectedDrafts);
-router.post('/publish-selected', requireApiKey, requireListingPassword, parseCsvBody, parseWorkbookBody, controller.publishSelectedAuthnAuth);
-router.get('/drafts/:jobId', requireApiKey, controller.getJob);
+// The Mongo-backed queue contains private client inventory; every queue
+// operation requires both the app API key and the private listing password.
+router.get('/queue', requireApiKey, requireListingPassword, controller.getPrivateQueue);
+router.post('/queue/import', requireApiKey, requireListingPassword, parseCsvBody, parseWorkbookBody, controller.importPrivateQueue);
+router.put('/queue/:queueKey/photos', requireApiKey, requireListingPassword, controller.savePrivateQueuePhotos);
+router.post('/queue/publish', requireApiKey, requireListingPassword, controller.publishPrivateQueueItems);
 
 module.exports = router;

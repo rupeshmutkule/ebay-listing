@@ -1,5 +1,6 @@
 const draftListings = require('../services/ibmDraftListings');
 const authnAuthListings = require('../services/ibmAuthnAuthListing');
+const listingQueue = require('../services/ibmListingQueue');
 
 exports.readiness = async (req, res) => {
   try {
@@ -106,5 +107,44 @@ exports.publishSelectedAuthnAuth = async (req, res) => {
     res.json({ success: true, ...await authnAuthListings.publishSelected(selectedRows) });
   } catch (error) {
     res.status(400).json({ error: error.message || 'Could not publish selected listings.' });
+  }
+};
+
+exports.getPrivateQueue = async (req, res) => {
+  try {
+    res.json({ success: true, queue: await listingQueue.listQueue() });
+  } catch (error) {
+    res.status(503).json({ error: error.message || 'Could not load the private product queue.' });
+  }
+};
+
+exports.importPrivateQueue = async (req, res) => {
+  try {
+    const contentType = req.get('content-type') || '';
+    const rows = contentType.includes('text/csv') || contentType.includes('text/plain')
+      ? draftListings.parseCsv(req.body)
+      : draftListings.parseWorkbookBuffer(req.body);
+    const sourceName = req.get('x-source-name') || 'product workbook';
+    res.json({ success: true, ...await listingQueue.importRows(rows, sourceName) });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Could not import products into the private queue.' });
+  }
+};
+
+exports.savePrivateQueuePhotos = async (req, res) => {
+  try {
+    const item = await listingQueue.savePhotos(req.params.queueKey, req.body.photoUrls);
+    res.json({ success: true, item });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Could not save product photos.' });
+  }
+};
+
+exports.publishPrivateQueueItems = async (req, res) => {
+  try {
+    const result = await listingQueue.publishQueued(req.body.queueKeys);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Could not publish the queued product.' });
   }
 };
