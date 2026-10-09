@@ -214,6 +214,7 @@ function parseWorkbookBuffer(buffer) {
 
 function previewRowsLocally(rows) {
   const preview = rows.map((row) => ({
+    ...row,
     rowNumber: row.rowNumber,
     assetNumber: row.assetNumber,
     title: makeTitle(row),
@@ -242,7 +243,6 @@ function validateRow(row) {
   if (!row.equipmentType) issues.push('missing Equipment_Type');
   if (!(row.askingPrice > 0)) issues.push('Asking Price must be positive');
   if (row.shippingAmount == null) issues.push(`Freight/blank Shipping Price is not numeric (${row.shippingText || 'blank'}); excluded from this live-publish batch`);
-  if (!row.photoUrls?.length) issues.push('add at least one product photo URL before live publishing');
   return issues;
 }
 

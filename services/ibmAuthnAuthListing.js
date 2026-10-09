@@ -1,6 +1,5 @@
 const tradingApi = require('./tradingapi');
 const { sellerBAuthToken } = require('../config/ebayAuth');
-const { getListingQueueCollection } = require('./oauthStorage');
 
 const CATEGORY_ID = String(process.env.IBM_EBAY_CATEGORY_ID || '40004');
 const MAX_BATCH_SIZE = 1;
@@ -94,21 +93,11 @@ function toTradingItem(row) {
 }
 async function getReadiness() {
   const checks = [
-    { name: 'MongoDB private queue', ready: false, detail: 'Set MONGO_URI; the queue must be durable before importing client inventory' },
     { name: 'Semi Equipment Auth’n’Auth token', ready: Boolean(sellerBAuthToken), detail: sellerBAuthToken ? 'Configured in server environment' : 'Set SELLER_B_AUTH_TOKEN' },
-    { name: 'Private listing access password', ready: Boolean(clean(process.env.IBM_LISTING_ACCESS_PASSWORD)), detail: process.env.IBM_LISTING_ACCESS_PASSWORD ? 'Configured' : 'Set IBM_LISTING_ACCESS_PASSWORD; keep it private and share it only with authorized users' },
     { name: 'Domestic shipping service', ready: Boolean(clean(process.env.IBM_SHIPPING_SERVICE)) && !/^freight$/i.test(clean(process.env.IBM_SHIPPING_SERVICE)), detail: !clean(process.env.IBM_SHIPPING_SERVICE) ? 'Set IBM_SHIPPING_SERVICE to the seller-approved domestic service code' : /^freight$/i.test(clean(process.env.IBM_SHIPPING_SERVICE)) ? 'Current service is Freight; numeric-shipping queue items need the seller-approved domestic service code' : `${clean(process.env.IBM_SHIPPING_SERVICE)}; verify this code is enabled for Seller B and category 40004` },
     { name: 'Payment profile', ready: Boolean(clean(process.env.IBM_PAYMENT_POLICY_ID)), detail: clean(process.env.IBM_PAYMENT_POLICY_ID) ? 'Configured; still must be accepted by eBay for this seller' : 'Set IBM_PAYMENT_POLICY_ID to the seller’s managed-payment profile ID' },
     { name: 'Production category', ready: CATEGORY_ID === '40004', detail: `Category ${CATEGORY_ID}` }
   ];
-  if (process.env.MONGO_URI) {
-    try {
-      await getListingQueueCollection();
-      checks[0] = { name: 'MongoDB private queue', ready: true, detail: 'Connected; app-side products are stored in the private listing queue' };
-    } catch (error) {
-      checks[0] = { name: 'MongoDB private queue', ready: false, detail: error.message || 'Could not access MongoDB queue storage' };
-    }
-  }
   let activeCount = null;
   if (sellerBAuthToken) {
     try {

@@ -1,6 +1,5 @@
 const draftListings = require('../services/ibmDraftListings');
 const authnAuthListings = require('../services/ibmAuthnAuthListing');
-const listingQueue = require('../services/ibmListingQueue');
 
 exports.readiness = async (req, res) => {
   try {
@@ -96,55 +95,34 @@ exports.getJob = (req, res) => {
 exports.publishSelectedAuthnAuth = async (req, res) => {
   try {
     const contentType = req.get('content-type') || '';
-    const rows = contentType.includes('text/csv') || contentType.includes('text/plain')
-      ? draftListings.parseCsv(req.body)
-      : draftListings.parseWorkbookBuffer(req.body);
-    const requested = String(req.query.rowNumbers || '').split(',').map(Number).filter(Number.isInteger);
-    const selected = new Set(requested);
-    if (!selected.size) return res.status(400).json({ error: 'Select at least one product row.' });
-    const selectedRows = rows.filter((row) => selected.has(row.rowNumber));
-    if (selectedRows.length !== selected.size) return res.status(400).json({ error: 'Some selected product rows were not found in the uploaded workbook.' });
-    res.json({ success: true, ...await authnAuthListings.publishSelected(selectedRows) });
+    let selectedRows;
+    if (contentType.includes('application/json')) {
+      selectedRows = req.body?.rows;
+      if (!Array.isArray(selectedRows) || !selectedRows.length) return res.status(400).json({ error: 'Select at least one product.' });
+    } else {
+      const rows = contentType.includes('text/csv') || contentType.includes('text/plain')
+        ? draftListings.parseCsv(req.body)
+        : draftListings.parseWorkbookBuffer(req.body);
+      const requested = String(req.query.rowNumbers || '').split(',').map(Number).filter(Number.isInteger);
+      const selected = new Set(requested);
+      if (!selected.size) return res.status(400).json({ error: 'Select at least one product row.' });
+      selectedRows = rows.filter((row) => selected.has(row.rowNumber));
+      if (selectedRows.length !== selected.size) return res.status(400).json({ error: 'Some selected product rows were not found in the uploaded workbook.' });
+    }
+    const results = [];
+    for (const row of selectedRows) {
+      const result = await authnAuthListings.publishSelected([row]);
+      results.push(...result.results);
+    }
+    res.json({
+      success: true,
+      results,
+      published: results.filter((result) => result.status === 'published').length,
+      blocked: results.filter((result) => result.status === 'blocked').length,
+      failed: results.filter((result) => result.status === 'failed').length,
+      skipped: results.filter((result) => result.status === 'skipped').length
+    });
   } catch (error) {
     res.status(400).json({ error: error.message || 'Could not publish selected listings.' });
-  }
-};
-
-exports.getPrivateQueue = async (req, res) => {
-  try {
-    res.json({ success: true, queue: await listingQueue.listQueue() });
-  } catch (error) {
-    res.status(503).json({ error: error.message || 'Could not load the private product queue.' });
-  }
-};
-
-exports.importPrivateQueue = async (req, res) => {
-  try {
-    const contentType = req.get('content-type') || '';
-    const rows = contentType.includes('text/csv') || contentType.includes('text/plain')
-      ? draftListings.parseCsv(req.body)
-      : draftListings.parseWorkbookBuffer(req.body);
-    const sourceName = req.get('x-source-name') || 'product workbook';
-    res.json({ success: true, ...await listingQueue.importRows(rows, sourceName) });
-  } catch (error) {
-    res.status(400).json({ error: error.message || 'Could not import products into the private queue.' });
-  }
-};
-
-exports.savePrivateQueuePhotos = async (req, res) => {
-  try {
-    const item = await listingQueue.savePhotos(req.params.queueKey, req.body.photoUrls);
-    res.json({ success: true, item });
-  } catch (error) {
-    res.status(400).json({ error: error.message || 'Could not save product photos.' });
-  }
-};
-
-exports.publishPrivateQueueItems = async (req, res) => {
-  try {
-    const result = await listingQueue.publishQueued(req.body.queueKeys);
-    res.json({ success: true, ...result });
-  } catch (error) {
-    res.status(400).json({ error: error.message || 'Could not publish the queued product.' });
   }
 };

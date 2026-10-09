@@ -79,7 +79,6 @@
   }
 
   #csvFile { max-width: 260px; align-self: center; }
-  #listingPassword { min-width: 210px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; }
   .photo-urls { min-width: 250px; min-height: 76px; border-radius: 8px; padding: 8px; font-size: 12px; }
   h2 { margin: 0 0 12px; font-size: 19px; }
 
@@ -228,11 +227,9 @@
     <div class="toolbar">
       <label for="csvFile">Product file:</label>
       <input id="csvFile" type="file" accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv" aria-label="Choose Excel or CSV product file">
-      <button id="btnCreateDrafts">Import to Private Queue</button>
+      <button id="btnPublishSelected">Add Selected to Semi Equipment (Auth’n’Auth)</button>
       <button id="btnViewB" class="secondary">View products on Semi Equipment Store (Seller B)</button>
-      <input id="listingPassword" type="password" autocomplete="current-password" placeholder="Private app password" aria-label="Private app password">
-      <button id="btnLoadQueue" class="secondary">Load Private Queue</button>
-      <button id="btnPublishQueue">Publish Selected Live (Auth’n’Auth)</button>
+      <button id="btnViewDrafts" class="secondary">View Saved Drafts (This Browser)</button>
     </div>
   </section>
 
@@ -244,7 +241,7 @@
 
   <section class="panel">
     <h2 id="tableTitle">Product review</h2>
-    <p class="summary">Imported numeric-shipping products stay private in this app until published. Freight rows are excluded. Add direct HTTPS image URLs later; eBay requires at least one photo for a live listing.</p>
+    <p class="summary">Upload a workbook, select products, and click Add Selected. Products without photos are saved in this browser only; products with photos are sent to eBay live. Freight rows are excluded.</p>
     <div id="tableWrap"></div>
   </section>
 </div>
@@ -255,10 +252,15 @@ const statusBox = document.getElementById('statusBox');
 const tableWrap = document.getElementById('tableWrap');
 const jobSummary = document.getElementById('jobSummary');
 const csvFile = document.getElementById('csvFile');
-const btnCreateDrafts = document.getElementById('btnCreateDrafts');
-const listingPasswordInput = document.getElementById('listingPassword');
-window.listingPassword = '';
-window.selectedQueueKeys = new Set();
+window.productRows = [];
+window.selectedProductKeys = new Set();
+window.draftMode = false;
+try {
+  const savedDrafts = JSON.parse(localStorage.getItem('semiEquipmentSavedDrafts') || '[]');
+  window.savedDrafts = Array.isArray(savedDrafts) ? savedDrafts : [];
+} catch {
+  window.savedDrafts = [];
+}
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, ch => ({
@@ -300,8 +302,7 @@ function sleep(ms) {
 async function callApi(url, options = {}) {
   const headers = {
     ...(options.headers || {}),
-    ...(apiKey ? { 'X-Api-Key': apiKey } : {}),
-    ...(window.listingPassword ? { 'X-Listing-Password': window.listingPassword } : {})
+    ...(apiKey ? { 'X-Api-Key': apiKey } : {})
   };
 
   const res = await fetch(url, { ...options, headers });
@@ -427,58 +428,60 @@ async function pollJob(jobId) {
   }
 }
 
-function renderQueue(queue) {
-  if (!queue.length) {
-    tableWrap.innerHTML = '<p>Private queue is empty. Choose the workbook and click “Import to Private Queue”.</p>';
+function rowKey(row) { return row.assetNumber ? `IBM-${row.assetNumber}` : `ROW-${row.rowNumber}`; }
+
+function persistBrowserDrafts() {
+  localStorage.setItem('semiEquipmentSavedDrafts', JSON.stringify(window.savedDrafts));
+}
+
+function renderReviewRows(rows, saved = false) {
+  if (!rows.length) {
+    tableWrap.innerHTML = saved ? '<p>No browser-saved products. Upload a workbook, select items without photos, and click Add Selected.</p>' : '<p>No product rows found.</p>';
     return;
   }
-  const rows = queue.map(item => {
-    const product = item.product || {};
-    const title = [product.make, product.model, product.equipmentType].filter(Boolean).join(' ');
-    const canPublish = item.status === 'ready';
-    const publishIssues = item.publishResult?.issues || [];
-    const details = item.issues?.length ? item.issues.join('; ') : item.publishError || item.publishResult?.error || item.publishResult?.reason || publishIssues.join('; ') || '';
-    const photoValue = (item.photoUrls || []).join('\n');
+  const entries = rows.map(row => {
+    const key = rowKey(row);
+    const title = row.title || [row.make, row.model, row.equipmentType].filter(Boolean).join(' ');
+    const shipping = row.shippingAmount ?? row.spreadsheetShipping;
+    const invalid = row.issues?.length > 0 || shipping == null;
+    const status = invalid ? (shipping == null ? 'Freight excluded' : 'Needs product data') : (row.photoUrls?.length ? 'Ready to publish live' : 'Saved in this browser when selected');
     return `<tr>
-      <td><input type="checkbox" class="queue-check" data-key="${escapeHtml(item.queueKey)}" ${canPublish ? '' : 'disabled'} ${window.selectedQueueKeys.has(item.queueKey) ? 'checked' : ''} aria-label="Select ${escapeHtml(title || product.assetNumber || item.queueKey)}"></td>
-      <td>${escapeHtml(item.excelRow ?? '')}</td><td>${escapeHtml(product.assetNumber || '')}</td>
-      <td>${escapeHtml(title)}</td><td>$${escapeHtml(product.askingPrice ?? '')}</td>
-      <td>$${escapeHtml(product.shippingAmount ?? '')}</td>
-      <td><textarea class="photo-urls" data-key="${escapeHtml(item.queueKey)}" placeholder="Paste direct HTTPS image URL(s), one per line" ${['published','publishing'].includes(item.status) ? 'disabled' : ''}>${escapeHtml(photoValue)}</textarea><button class="save-photos secondary" data-key="${escapeHtml(item.queueKey)}" ${['published','publishing'].includes(item.status) ? 'disabled' : ''}>Save photos</button></td>
-      <td>${escapeHtml(item.status)}${product.askingPrice > 2000 ? '<br>Best Offer enabled' : ''}</td>
-      <td>${escapeHtml(details)}${item.itemUrl ? `<br><a href="${escapeHtml(item.itemUrl)}" target="_blank" rel="noopener">View live listing (${escapeHtml(item.itemId)})</a>` : ''}</td>
+      <td><input type="checkbox" class="product-check" data-key="${escapeHtml(key)}" ${invalid ? 'disabled' : ''} ${window.selectedProductKeys.has(key) ? 'checked' : ''}></td>
+      <td>${escapeHtml(row.rowNumber ?? '')}</td><td>${escapeHtml(row.assetNumber || '')}</td><td>${escapeHtml(title)}</td>
+      <td>$${escapeHtml(row.askingPrice ?? '')}</td><td>$${escapeHtml(shipping ?? '')}</td>
+      <td>${escapeHtml((row.photoUrls || []).length)} photo(s)${saved ? `<br><textarea class="photo-urls" data-photo-key="${escapeHtml(key)}" placeholder="Paste direct HTTPS photo URL(s), one per line">${escapeHtml((row.photoUrls || []).join('\n'))}</textarea><button class="save-browser-photos secondary" data-photo-key="${escapeHtml(key)}">Save photos</button>` : ''}</td>
+      <td>${escapeHtml(status)}${row.askingPrice > 2000 ? '<br>Best Offer enabled' : ''}</td>
+      <td>${escapeHtml(row.issues?.join('; ') || (row.photoUrls?.length ? 'Selected items will publish live' : 'No photo: app-only saved product; add photos before publishing'))}</td>
     </tr>`;
   }).join('');
-  tableWrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Select</th><th>Excel row</th><th>Asset #</th><th>Listing title</th><th>Price</th><th>Shipping</th><th>Photos to add later</th><th>Queue status</th><th>Result / details</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-  tableWrap.querySelectorAll('.queue-check').forEach(check => check.addEventListener('change', () => {
-    if (check.checked) window.selectedQueueKeys.add(check.dataset.key);
-    else window.selectedQueueKeys.delete(check.dataset.key);
+  tableWrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Select</th><th>Excel row</th><th>Asset #</th><th>Listing title</th><th>Price</th><th>Shipping</th><th>${saved ? 'Photo URLs to add' : 'Photos'}</th><th>Status</th><th>Details</th></tr></thead><tbody>${entries}</tbody></table></div>`;
+  tableWrap.querySelectorAll('.product-check').forEach(check => check.addEventListener('change', () => {
+    if (check.checked) window.selectedProductKeys.add(check.dataset.key);
+    else window.selectedProductKeys.delete(check.dataset.key);
   }));
-  tableWrap.querySelectorAll('.save-photos').forEach(button => button.addEventListener('click', async () => {
-    try {
-      const textarea = tableWrap.querySelector(`.photo-urls[data-key="${CSS.escape(button.dataset.key)}"]`);
-      await callApi(`/ebay-listings/queue/${encodeURIComponent(button.dataset.key)}/photos`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ photoUrls: textarea.value })
-      });
-      log(`Saved photos for ${button.dataset.key}.`, 'ok');
-      await loadQueue(false);
-    } catch (error) { log(`Could not save photos: ${error.message}`, 'bad'); }
+  tableWrap.querySelectorAll('.save-browser-photos').forEach(button => button.addEventListener('click', () => {
+    const key = button.dataset.photoKey;
+    const field = tableWrap.querySelector(`.photo-urls[data-photo-key="${CSS.escape(key)}"]`);
+    const urls = field.value.split(/[\n;]+/).map(value => value.trim()).filter(Boolean);
+    if (!urls.length || urls.some(value => { try { return new URL(value).protocol !== 'https:'; } catch { return true; } })) {
+      return log('Add at least one valid HTTPS image URL for this saved product.', 'bad');
+    }
+    const draft = window.savedDrafts.find(item => rowKey(item) === key);
+    if (!draft) return log('Saved browser draft not found. Re-upload the workbook and save the product again.', 'bad');
+    draft.photoUrls = [...new Set(urls)];
+    draft.status = 'ready to publish';
+    persistBrowserDrafts();
+    log(`Saved ${draft.photoUrls.length} photo URL(s) for ${rowKey(draft)} in this browser.`, 'ok');
+    renderSavedDrafts();
   }));
 }
 
-async function loadQueue(announce = true) {
-  window.listingPassword = listingPasswordInput.value;
-  if (!window.listingPassword) return log('Enter the private app password to open the product queue.', 'warn');
-  try {
-    const data = await callApi('/ebay-listings/queue');
-    document.getElementById('tableTitle').textContent = 'Private product queue (stored in MongoDB)';
-    renderQueue(data.queue || []);
-    const counts = (data.queue || []).reduce((acc, item) => { acc[item.status] = (acc[item.status] || 0) + 1; return acc; }, {});
-    jobSummary.textContent = `${data.queue.length} queued · ${counts.awaiting_photos || 0} awaiting photos · ${counts.ready || 0} ready to publish · ${counts.published || 0} published`;
-    if (announce) log(`Loaded ${data.queue.length} private queue item(s) from MongoDB.`, 'ok');
-  } catch (error) {
-    log(`Could not open private queue: ${error.message}`, 'bad');
-  }
+function renderSavedDrafts() {
+  document.getElementById('tableTitle').textContent = 'Saved drafts in this browser';
+  window.draftMode = true;
+  window.selectedProductKeys.clear();
+  renderReviewRows(window.savedDrafts, true);
+  jobSummary.textContent = `${window.savedDrafts.length} browser-saved product(s). These are not eBay/Semi Equipment drafts.`;
 }
 
 function renderProducts(products) {
@@ -507,79 +510,84 @@ function updateSummary(preview) {
   (preview.setupIssues || []).forEach(issue => log(`Account setup issue: ${typeof issue === 'string' ? issue : JSON.stringify(issue)}`, 'bad'));
 }
 
-async function pollDraftJob(jobId) {
-  let lastCount = 0;
-  while (true) {
-    const data = await callApi(`/ebay-listings/drafts/${encodeURIComponent(jobId)}`);
-    const job = data.job;
-    jobSummary.textContent = `Draft job ${job.jobId}: ${job.status} · ${job.completed}/${job.total} processed · ${job.drafted} drafts · ${job.skipped} skipped · ${job.failed} failed`;
-    if (job.results.length > lastCount) {
-      lastCount = job.results.length;
-      const resultsByRow = new Map(job.results.map(result => [result.rowNumber, result]));
-      renderCsvRows(window.currentCsvPreview.rows.map(row => resultsByRow.get(row.rowNumber) || row));
-    }
-    if (['completed', 'completed_with_errors', 'failed'].includes(job.status)) {
-      if (job.error) log(`Job stopped: ${JSON.stringify(job.error)}`, 'bad');
-      log(`Finished: ${job.drafted} drafts, ${job.skipped} skipped, ${job.failed} failed.`, job.failed ? 'warn' : 'ok');
-      return;
-    }
-    await sleep(1500);
-  }
-}
-
-document.getElementById('btnCreateDrafts').onclick = async () => {
+csvFile.onchange = async () => {
   const file = csvFile.files[0];
-  if (!file) return log('Choose an Excel workbook (.xlsx or .xls) or CSV file first.', 'bad');
+  if (!file) return;
   const extension = file.name.toLowerCase().split('.').pop();
   if (!['csv', 'xlsx', 'xls'].includes(extension)) return log('Choose an .xlsx, .xls, or .csv file.', 'bad');
   if (file.size > 10 * 1024 * 1024) return log('File is larger than the 10 MB upload limit.', 'bad');
 
-  btnCreateDrafts.disabled = true;
-  window.listingPassword = listingPasswordInput.value;
-  if (!window.listingPassword) return log('Enter the private app password to save products to the queue.', 'warn');
   const isCsv = extension === 'csv';
   const contentType = isCsv ? 'text/csv' : extension === 'xls' ? 'application/vnd.ms-excel' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
   try {
     const fileBody = isCsv ? await file.text() : await file.arrayBuffer();
-    log(`Importing ${file.name} into the private MongoDB queue; no eBay listing will be created yet...`, 'warn');
-    const result = await callApi('/ebay-listings/queue/import', {
+    tableWrap.innerHTML = '<p>Reading the workbook and preparing product review…</p>';
+    log(`Reading ${file.name}; this step does not create eBay listings.`, 'warn');
+    const result = await callApi(isCsv ? '/ebay-listings/preview-csv' : '/ebay-listings/preview-workbook', {
       method: 'POST',
-      headers: { 'Content-Type': contentType, 'X-Source-Name': file.name },
+      headers: { 'Content-Type': contentType },
       body: fileBody
     });
-    window.selectedQueueKeys = new Set();
-    log(`Queued ${result.imported} numeric-shipping product(s); excluded ${result.freightExcluded} Freight/non-numeric row(s). Photos can be added later.`, 'ok');
-    await loadQueue(false);
+    window.productRows = result.preview.rows || [];
+    window.selectedProductKeys = new Set();
+    window.draftMode = false;
+    document.getElementById('tableTitle').textContent = 'Select products to add to Semi Equipment';
+    renderReviewRows(window.productRows);
+    const numeric = window.productRows.filter(row => row.shippingAmount != null).length;
+    const freight = window.productRows.length - numeric;
+    jobSummary.textContent = `${window.productRows.length} products · ${numeric} with numeric shipping · ${freight} Freight/blank rows excluded`;
+    log(`Loaded ${window.productRows.length} rows. Select products, then click “Add Selected to Semi Equipment”. Missing-photo rows will be saved in this browser.`, 'ok');
   } catch (error) {
     log(`Upload / validation failed: ${error.message}`, 'bad');
-  } finally {
-    btnCreateDrafts.disabled = false;
   }
 };
 
-document.getElementById('btnLoadQueue').onclick = () => loadQueue(true);
+document.getElementById('btnViewDrafts').onclick = renderSavedDrafts;
 
-document.getElementById('btnPublishQueue').onclick = async () => {
-  window.listingPassword = listingPasswordInput.value;
-  if (!window.listingPassword) return log('Enter the private app password before publishing.', 'warn');
-  const keys = [...window.selectedQueueKeys];
-  if (keys.length !== 1) return log('Select exactly one queue item that is marked ready. Publish one item at a time.', 'warn');
-  if (!confirm(`Publish ${keys[0]} live on eBay now? This creates a public active listing.`)) return log('Live publishing cancelled.', 'warn');
+document.getElementById('btnPublishSelected').onclick = async () => {
+  const selected = window.draftMode
+    ? window.savedDrafts.filter(row => window.selectedProductKeys.has(rowKey(row)))
+    : window.productRows.filter(row => window.selectedProductKeys.has(rowKey(row)));
+  if (!selected.length) return log('Choose the Excel file, then select at least one product.', 'warn');
+  const invalid = selected.filter(row => row.issues?.length || (row.shippingAmount ?? row.spreadsheetShipping) == null);
+  if (invalid.length) return log('One or more selected products have missing required data or Freight shipping; fix the workbook selection first.', 'bad');
+  const needsPhotos = selected.filter(row => !(row.photoUrls || []).length);
+  const withPhotos = selected.filter(row => (row.photoUrls || []).length);
+  for (const row of needsPhotos) {
+    const key = rowKey(row);
+    if (!window.savedDrafts.some(saved => rowKey(saved) === key)) window.savedDrafts.push({ ...row, status: 'awaiting_photos', savedAt: new Date().toISOString() });
+  }
+  if (needsPhotos.length) {
+    persistBrowserDrafts();
+    log(`Saved ${needsPhotos.length} product(s) without photos in this browser. They are not drafts in eBay. Open “View Saved Drafts” to add photos later.`, 'warn');
+  }
+  if (!withPhotos.length) {
+    window.selectedProductKeys.clear();
+    return renderSavedDrafts();
+  }
+  if (!confirm(`Publish ${withPhotos.length} selected product(s) live on Semi Equipment now?`)) return log('Live publishing cancelled. Products without photos remain saved in this browser.', 'warn');
   try {
-    log(`Publishing ${keys[0]} through Auth’n’Auth...`, 'warn');
-    const result = await callApi('/ebay-listings/queue/publish', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ queueKeys: keys })
+    log(`Publishing ${withPhotos.length} product(s) through Auth’n’Auth, one at a time...`, 'warn');
+    const result = await callApi('/ebay-listings/publish-selected', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rows: withPhotos })
     });
-    const item = result.result || {};
-    log(item.status === 'published' ? `Published ${item.sku} as ${item.itemId}: ${item.url}` : `${String(item.status || 'result').toUpperCase()} ${item.sku || keys[0]}: ${item.error || item.issues?.join('; ') || item.reason || ''}`, item.status === 'published' ? 'ok' : 'bad');
-    window.selectedQueueKeys.clear();
-    await loadQueue(false);
+    (result.results || []).forEach(item => {
+      const success = item.status === 'published';
+      log(success ? `Published ${item.sku} as ${item.itemId}: ${item.url}` : `${String(item.status || 'result').toUpperCase()} ${item.sku || ''}: ${item.error || item.issues?.join('; ') || item.reason || ''}`, success ? 'ok' : 'bad');
+      if (success) window.savedDrafts = window.savedDrafts.filter(draft => rowKey(draft) !== `IBM-${String(item.sku || '').replace(/^IBM-/, '')}`);
+    });
+    persistBrowserDrafts();
+    jobSummary.textContent = `${result.published} published live · ${result.blocked} blocked · ${result.failed} failed · ${result.skipped} already listed`;
+    window.selectedProductKeys.clear();
   } catch (error) { log(`Live publishing failed: ${error.message}`, 'bad'); }
 };
 
 document.getElementById('btnViewB').onclick = async () => {
   const viewButton = document.getElementById('btnViewB');
   viewButton.disabled = true;
+  window.draftMode = false;
+  window.productRows = [];
+  window.selectedProductKeys.clear();
   log('Loading live products from Semi Equipment Store using Seller B credentials...', 'warn');
   try {
     const data = await callApi('/ebay-store-migration/api/seller-b/products');
