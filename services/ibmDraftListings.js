@@ -166,7 +166,9 @@ function normalizeRows(rawRows) {
       askingPrice: amount(get('Asking Price', 'Price')),
       shippingText: clean(get('Shipping Pirce', 'Shipping Price', 'Shipping Amount')),
       shippingAmount: amount(get('Shipping Pirce', 'Shipping Price', 'Shipping Amount')),
-      location: clean(get('Location'))
+      location: clean(get('Location')),
+      photoUrls: clean(get('Photo URLs', 'Photo URL(s)', 'Image URLs', 'Picture URLs', 'Photo URL', 'Image URL'))
+        .split(/[;\n]+/).map((url) => url.trim()).filter(Boolean)
     };
   });
 }
@@ -217,6 +219,7 @@ function previewRowsLocally(rows) {
     title: makeTitle(row),
     askingPrice: row.askingPrice,
     spreadsheetShipping: row.shippingAmount,
+    photoUrls: row.photoUrls || [],
     selectedShipping: null,
     shippingDifference: null,
     offerEnabled: row.askingPrice > 2000,
@@ -238,7 +241,8 @@ function validateRow(row) {
   if (!row.model) issues.push('missing Model');
   if (!row.equipmentType) issues.push('missing Equipment_Type');
   if (!(row.askingPrice > 0)) issues.push('Asking Price must be positive');
-  if (row.shippingAmount == null) issues.push(`Shipping Pirce is not numeric (${row.shippingText || 'blank'}); freight needs manual policy selection`);
+  if (row.shippingAmount == null) issues.push(`Shipping Price is not numeric (${row.shippingText || 'blank'}); freight needs a manually approved amount`);
+  if (!row.photoUrls?.length) issues.push('add at least one product photo URL before live publishing');
   return issues;
 }
 

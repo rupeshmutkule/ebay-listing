@@ -149,20 +149,19 @@ async function addFixedPriceItem(item, policyIds, oauthToken) {
   const quantity = Number(item.Quantity || 1);
   const price = item.StartPrice?.['#text'] ?? item.StartPrice ?? item.BuyItNowPrice?.['#text'] ?? '0.00';
   const currency = item.StartPrice?.['@_currencyID'] || 'USD';
-  const useBusinessPolicies = Boolean(
-    policyIds?.paymentPolicyId &&
-    policyIds?.fulfillmentPolicyId &&
-    policyIds?.returnPolicyId
-  );
+  const usePaymentProfile = Boolean(policyIds?.paymentPolicyId);
+  const useFulfillmentProfile = Boolean(policyIds?.fulfillmentPolicyId);
+  const useReturnProfile = Boolean(policyIds?.returnPolicyId);
+  const useAnyBusinessProfile = usePaymentProfile || useFulfillmentProfile || useReturnProfile;
 
-  const legacyPaymentMethods = toArray(item.PaymentMethods)
+  const legacyPaymentMethods = usePaymentProfile ? '' : toArray(item.PaymentMethods)
     .filter(Boolean)
     .map(method => `<PaymentMethods>${escapeXml(method)}</PaymentMethods>`)
     .join('');
 
-  const shippingDetailsXml = useBusinessPolicies ? '' : buildFragment('ShippingDetails', item.ShippingDetails);
-  const returnPolicyXml = useBusinessPolicies ? '' : buildFragment('ReturnPolicy', item.ReturnPolicy);
-  const payPalEmailXml = useBusinessPolicies || !item.PayPalEmailAddress
+  const shippingDetailsXml = useFulfillmentProfile ? '' : buildFragment('ShippingDetails', item.ShippingDetails);
+  const returnPolicyXml = useReturnProfile ? '' : buildFragment('ReturnPolicy', item.ReturnPolicy);
+  const payPalEmailXml = usePaymentProfile || !item.PayPalEmailAddress
     ? ''
     : `<PayPalEmailAddress>${escapeXml(item.PayPalEmailAddress)}</PayPalEmailAddress>`;
 
@@ -184,12 +183,8 @@ async function addFixedPriceItem(item, policyIds, oauthToken) {
     <PictureDetails>${picsXml}</PictureDetails>
     <ItemSpecifics>${specificsXml}</ItemSpecifics>
     ${
-      useBusinessPolicies
-        ? `<SellerProfiles>
-            <SellerPaymentProfile><PaymentProfileID>${policyIds.paymentPolicyId}</PaymentProfileID></SellerPaymentProfile>
-            <SellerReturnProfile><ReturnProfileID>${policyIds.returnPolicyId}</ReturnProfileID></SellerReturnProfile>
-            <SellerShippingProfile><ShippingProfileID>${policyIds.fulfillmentPolicyId}</ShippingProfileID></SellerShippingProfile>
-          </SellerProfiles>`
+      useAnyBusinessProfile
+        ? `<SellerProfiles>${usePaymentProfile ? `<SellerPaymentProfile><PaymentProfileID>${escapeXml(policyIds.paymentPolicyId)}</PaymentProfileID></SellerPaymentProfile>` : ''}${useReturnProfile ? `<SellerReturnProfile><ReturnProfileID>${escapeXml(policyIds.returnPolicyId)}</ReturnProfileID></SellerReturnProfile>` : ''}${useFulfillmentProfile ? `<SellerShippingProfile><ShippingProfileID>${escapeXml(policyIds.fulfillmentPolicyId)}</ShippingProfileID></SellerShippingProfile>` : ''}</SellerProfiles>${legacyPaymentMethods}${payPalEmailXml}${shippingDetailsXml}${returnPolicyXml}`
         : `${legacyPaymentMethods}${payPalEmailXml}${shippingDetailsXml}${returnPolicyXml}`
     }
   </Item>`;

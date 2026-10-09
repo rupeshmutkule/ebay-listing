@@ -1,8 +1,9 @@
 const draftListings = require('../services/ibmDraftListings');
+const authnAuthListings = require('../services/ibmAuthnAuthListing');
 
 exports.readiness = async (req, res) => {
   try {
-    res.json({ success: true, readiness: await draftListings.getReadiness() });
+    res.json({ success: true, readiness: await authnAuthListings.getReadiness() });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -88,4 +89,22 @@ exports.getJob = (req, res) => {
   const job = draftListings.getJob(req.params.jobId);
   if (!job) return res.status(404).json({ error: 'Draft job not found' });
   res.json({ success: true, job });
+};
+
+
+exports.publishSelectedAuthnAuth = async (req, res) => {
+  try {
+    const contentType = req.get('content-type') || '';
+    const rows = contentType.includes('text/csv') || contentType.includes('text/plain')
+      ? draftListings.parseCsv(req.body)
+      : draftListings.parseWorkbookBuffer(req.body);
+    const requested = String(req.query.rowNumbers || '').split(',').map(Number).filter(Number.isInteger);
+    const selected = new Set(requested);
+    if (!selected.size) return res.status(400).json({ error: 'Select at least one product row.' });
+    const selectedRows = rows.filter((row) => selected.has(row.rowNumber));
+    if (selectedRows.length !== selected.size) return res.status(400).json({ error: 'Some selected product rows were not found in the uploaded workbook.' });
+    res.json({ success: true, ...await authnAuthListings.publishSelected(selectedRows) });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Could not publish selected listings.' });
+  }
 };

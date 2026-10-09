@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const controller = require('../controllers/listingController');
 const requireApiKey = require('../middleware/requireListingApiKey');
+const requireListingPassword = require('../middleware/requireListingAccessPassword');
 const parseCsvBody = express.text({ type: ['text/csv', 'application/csv', 'text/plain'], limit: '5mb' });
 const parseWorkbookBody = express.raw({ type: ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'], limit: '10mb' });
 
@@ -13,6 +14,7 @@ router.post('/drafts-csv', requireApiKey, parseCsvBody, controller.createDraftsF
 router.post('/preview-workbook', requireApiKey, parseWorkbookBody, controller.previewWorkbook);
 router.post('/drafts-workbook', requireApiKey, parseWorkbookBody, controller.createDraftsFromWorkbook);
 router.post('/drafts-selected', requireApiKey, parseCsvBody, parseWorkbookBody, controller.createSelectedDrafts);
+router.post('/publish-selected', requireApiKey, requireListingPassword, parseCsvBody, parseWorkbookBody, controller.publishSelectedAuthnAuth);
 router.get('/drafts/:jobId', requireApiKey, controller.getJob);
 
 module.exports = router;

@@ -228,7 +228,7 @@
       <input id="csvFile" type="file" accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv" aria-label="Choose Excel or CSV product file">
       <button id="btnCreateDrafts">Upload &amp; Review Products</button>
       <button id="btnViewB" class="secondary">View products on Semi Equipment Store (Seller B)</button>
-      <button id="btnConnectB" class="secondary" type="button">Connect Semi Equipment eBay</button>
+      
     </div>
   </section>
 
@@ -251,7 +251,6 @@ const tableWrap = document.getElementById('tableWrap');
 const jobSummary = document.getElementById('jobSummary');
 const csvFile = document.getElementById('csvFile');
 const btnCreateDrafts = document.getElementById('btnCreateDrafts');
-const btnConnectB = document.getElementById('btnConnectB');
 window.currentUploadFile = null;
 window.selectedListingRows = new Set();
 
@@ -428,21 +427,22 @@ function renderCsvRows(rows) {
   }
   const rowHtml = rows.map(row => {
     const status = row.status || (row.issues?.length ? 'needs attention' : row.policyValidationPending ? 'Excel data ready' : 'ready');
-    const details = row.issues?.length ? row.issues.join('; ') : row.policyValidationPending ? 'Seller B shipping and listing policies checked when drafts are submitted' : `Shipping selected: $${row.selectedShipping ?? '—'}${row.shippingDifference ? ` (difference $${row.shippingDifference})` : ''}`;
-    const offer = row.offerId ? `Offer ${row.offerId} (unpublished)` : '';
+    const details = row.issues?.length ? row.issues.join('; ') : row.policyValidationPending ? 'Auth’n’Auth live-listing checks run on publish' : `Shipping selected: $${row.selectedShipping ?? '—'}${row.shippingDifference ? ` (difference $${row.shippingDifference})` : ''}`;
+    const offer = row.offerEnabled ? 'Best Offer enabled' : 'Best Offer off';
     const selectable = !(row.issues?.length) && !['draft', 'skipped', 'failed'].includes(row.status);
     return `<tr>
       <td><input type="checkbox" class="listing-row-check" data-row-number="${escapeHtml(row.rowNumber)}" ${selectable ? '' : 'disabled'} ${window.selectedListingRows.has(Number(row.rowNumber)) ? 'checked' : ''} aria-label="Select ${escapeHtml(row.title || row.assetNumber || `row ${row.rowNumber}`)}"></td>
       <td>${escapeHtml(row.rowNumber)}</td>
       <td>${escapeHtml(row.assetNumber)}</td>
       <td>${escapeHtml(row.title)}</td>
+      <td>${escapeHtml((row.photoUrls || []).length)} photo(s)</td>
       <td>$${escapeHtml(row.askingPrice)}</td>
       <td>$${escapeHtml(row.spreadsheetShipping ?? '—')}</td>
       <td>${escapeHtml(status)}${offer ? `<br>${escapeHtml(offer)}` : ''}</td>
       <td>${escapeHtml(details)}${row.error ? `<br>${escapeHtml(JSON.stringify(row.error))}` : ''}${row.reason ? `<br>${escapeHtml(row.reason)}` : ''}</td>
     </tr>`;
   }).join('');
-  tableWrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th><input type="checkbox" id="selectAllReady" aria-label="Select all ready products"></th><th>Excel row</th><th>Asset #</th><th>Draft title</th><th>Price</th><th>Sheet shipping</th><th>Status</th><th>Details / missing data</th></tr></thead><tbody>${rowHtml}</tbody></table></div>`;
+  tableWrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th><input type="checkbox" id="selectAllReady" aria-label="Select all ready products"></th><th>Excel row</th><th>Asset #</th><th>Listing title</th><th>Photos</th><th>Price</th><th>Sheet shipping</th><th>Status</th><th>Details / missing data</th></tr></thead><tbody>${rowHtml}</tbody></table></div>`;
   const checks = [...tableWrap.querySelectorAll('.listing-row-check')];
   checks.forEach(check => check.addEventListener('change', () => {
     const rowNumber = Number(check.dataset.rowNumber);
@@ -481,7 +481,7 @@ function updateSummary(preview) {
   const blockedByLocation = !preview.merchantLocationKeyConfigured;
   const setupCount = preview.setupIssues?.length || 0;
   jobSummary.textContent = preview.localOnly
-    ? `${preview.total} rows loaded · ${preview.eligible} have required Excel data · ${preview.skipped} need attention · ${preview.bestOfferEligible} above $2,000 · Seller B checks run when drafts are submitted`
+    ? `${preview.total} rows loaded · ${preview.eligible} have required listing data · ${preview.skipped} blocked · ${preview.bestOfferEligible} above $2,000 · photo URLs must be supplied in the workbook before live listing`
     : `${preview.total} rows · ${preview.eligible} data/shipping ready · ${preview.skipped} need attention · ${preview.bestOfferEligible} ready items over $2,000${setupCount ? ` · ${setupCount} account setup issue(s)` : ''}${blockedByLocation ? ' · Missing inventory location key' : ''}`;
   (preview.setupIssues || []).forEach(issue => log(`Account setup issue: ${typeof issue === 'string' ? issue : JSON.stringify(issue)}`, 'bad'));
 }
@@ -517,25 +517,32 @@ document.getElementById('btnCreateDrafts').onclick = async () => {
   const isCsv = extension === 'csv';
   const previewUrl = isCsv ? '/ebay-listings/preview-csv' : '/ebay-listings/preview-workbook';
   const contentType = isCsv ? 'text/csv' : extension === 'xls' ? 'application/vnd.ms-excel' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-  const draftsUrl = `/ebay-listings/drafts-selected?rowNumbers=${encodeURIComponent([...window.selectedListingRows].join(','))}`;
+  const publishUrl = `/ebay-listings/publish-selected?rowNumbers=${encodeURIComponent([...window.selectedListingRows].join(','))}`;
   try {
     const fileBody = isCsv ? await file.text() : await file.arrayBuffer();
     if (window.currentUploadFile === file && window.currentCsvPreview) {
       const selectedRows = window.currentCsvPreview.rows.filter(row => window.selectedListingRows.has(Number(row.rowNumber)) && !row.issues?.length);
       if (!selectedRows.length) {
-        log('Select one or more ready products in the review table first.', 'warn');
+        log('Select one ready product in the review table first.', 'warn');
         return;
       }
-      const confirmed = confirm(`Create unpublished drafts for the ${selectedRows.length} selected products? Nothing will be published for sale.`);
-      if (!confirmed) return log('Draft creation cancelled.', 'warn');
-      log(`Creating drafts for ${selectedRows.length} selected products...`, 'warn');
-      const started = await callApi(draftsUrl, {
+      if (selectedRows.length !== 1) {
+        log('Publish one product at a time and review its eBay result before continuing.', 'warn');
+        return;
+      }
+      const confirmed = confirm(`Publish ${selectedRows.length} selected product live on eBay now? This creates an active listing.`);
+      if (!confirmed) return log('Live publishing cancelled.', 'warn');
+      const listingPassword = window.prompt('Enter the authorized app listing password (from the project owner):');
+      if (!listingPassword) return log('Live publishing cancelled; password was not entered.', 'warn');
+      log(`Publishing ${selectedRows.length} selected products through Auth’n’Auth...`, 'warn');
+      const result = await callApi(publishUrl, {
         method: 'POST',
-        headers: { 'Content-Type': contentType },
+        headers: { 'Content-Type': contentType, 'X-Listing-Password': listingPassword },
         body: fileBody
       });
-      log(`Draft job started for selected products: ${started.job.jobId}`, 'ok');
-      await pollDraftJob(started.job.jobId);
+      (result.results || []).forEach(item => log(item.status === 'published' ? `Published ${item.sku} as ${item.itemId}: ${item.url}` : `${item.status.toUpperCase()} ${item.sku}: ${item.error || item.issues?.join('; ') || item.reason || ''}`, item.status === 'published' ? 'ok' : 'bad'));
+      jobSummary.textContent = `${result.published} published · ${result.blocked} blocked · ${result.failed} failed · ${result.skipped} already listed`;
+      window.currentUploadFile = null;
       return;
     }
 
@@ -551,40 +558,23 @@ document.getElementById('btnCreateDrafts').onclick = async () => {
     window.currentUploadFile = file;
     window.currentCsvPreview = preview;
     window.selectedListingRows = new Set();
-    btnCreateDrafts.textContent = 'Create Drafts for Selected';
+    btnCreateDrafts.textContent = 'Publish Live Listings (Auth’n’Auth)';
     updateSummary(preview);
     renderCsvRows(preview.rows);
-    log(`Loaded ${preview.total} product rows from ${file.name}. Select the ready rows you want to list.`, preview.skipped ? 'warn' : 'ok');
+    log(`Loaded ${preview.total} product rows from ${file.name}. Add a Photo URLs column with HTTPS links, then select rows for live publishing.`, preview.skipped ? 'warn' : 'ok');
     if (!preview.merchantLocationKeyConfigured) {
-      log('Drafts are blocked until IBM_MERCHANT_LOCATION_KEY is configured for ZIP 85004.', 'bad');
-      return;
-    }
-    if (preview.setupIssues?.length) {
-      log('Draft creation is blocked until the account setup issues above are resolved.', 'bad');
+      log('Publishing is blocked until the listing location is configured for ZIP 85004.', 'bad');
       return;
     }
     if (!preview.eligible) {
-      log('No rows are ready. Fix the CSV or eBay policies shown in the Details column, then upload again.', 'bad');
+      log('No rows are ready. Add required fields and at least one HTTPS photo URL for each item; resolve Freight amounts before selecting.', 'bad');
       return;
     }
-    log('Select products in the table, then click “Create Drafts for Selected”.', 'ok');
+    log('Select products in the table, then click “Publish Live Listings (Auth’n’Auth)”. Items are published immediately; verify each result before continuing.', 'ok');
   } catch (error) {
     log(`Upload / validation failed: ${error.message}`, 'bad');
   } finally {
     btnCreateDrafts.disabled = false;
-  }
-};
-
-btnConnectB.onclick = async () => {
-  btnConnectB.disabled = true;
-  log('Preparing secure eBay authorization for Semi Equipment...', 'warn');
-  try {
-    const result = await callApi('/ebay-listings/oauth/authorize', { method: 'POST' });
-    log('Opening eBay sign-in. Confirm you are using the Semi Equipment seller account.', 'ok');
-    window.location.assign(result.authorizationUrl);
-  } catch (error) {
-    log(`Could not start eBay authorization: ${error.message}`, 'bad');
-    btnConnectB.disabled = false;
   }
 };
 
@@ -599,7 +589,7 @@ document.getElementById('btnViewB').onclick = async () => {
     log(`Seller B returned ${data.count} live products.`, 'ok');
   } catch (error) {
     const expired = /hard expired|invalid access token|invalid_grant/i.test(error.message);
-    log(expired ? 'Seller B authorization expired. Reauthorize Seller B, then try again.' : `Seller B product view failed: ${error.message}`, 'bad');
+    log(`Seller B Auth’n’Auth product view failed: ${error.message}`, 'bad');
   } finally {
     viewButton.disabled = false;
   }
