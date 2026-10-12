@@ -423,6 +423,19 @@ async function pollJob(jobId) {
 
 function rowKey(row) { return row.assetNumber ? `IBM-${row.assetNumber}` : `ROW-${row.rowNumber}`; }
 
+function removeCompletedRows(results) {
+  const completedKeys = new Set((results || [])
+    .filter(item => ['published', 'skipped'].includes(item.status))
+    .map(item => item.sku || (item.rowNumber ? `ROW-${item.rowNumber}` : ''))
+    .filter(Boolean));
+  if (!completedKeys.size) return 0;
+  const previousCount = window.productRows.length;
+  window.productRows = window.productRows.filter(row => !completedKeys.has(rowKey(row)));
+  completedKeys.forEach(key => window.selectedProductKeys.delete(key));
+  renderReviewRows(window.productRows);
+  return previousCount - window.productRows.length;
+}
+
 function renderReviewRows(rows) {
   if (!rows.length) {
     tableWrap.innerHTML = '<p>No product rows found. Choose an Excel or CSV file to load products.</p>';
@@ -537,7 +550,8 @@ async function publishRowsLive(selected) {
       log(success ? `Published ${item.sku} as ${item.itemId}: ${item.url}` : `${String(item.status || 'result').toUpperCase()} ${item.sku || ''}: ${item.error || item.issues?.join('; ') || item.reason || ''}`, success ? 'ok' : 'bad');
     });
     jobSummary.textContent = `${result.published} published live · ${result.blocked} blocked · ${result.failed} failed · ${result.skipped} already listed`;
-    window.selectedProductKeys.clear();
+    const hiddenCount = removeCompletedRows(result.results);
+    if (hiddenCount) log(`Hid ${hiddenCount} listed product(s) from the review table.`, 'ok');
     await loadReadiness();
   } catch (error) { log(`Live publishing failed: ${error.message}`, 'bad'); }
 }
