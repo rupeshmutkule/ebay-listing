@@ -447,6 +447,7 @@ function addListedReportRows(results, publishedRows) {
     if (!listedUrl || existingUrls.has(listedUrl)) return;
     window.listedReportRows.push({
       productName: rowTitle(sourceRow || {}) || item.sku || itemId,
+      sku: item.sku || rowKey(sourceRow || {}),
       listedUrl
     });
     existingUrls.add(listedUrl);

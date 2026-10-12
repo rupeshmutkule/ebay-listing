@@ -149,14 +149,15 @@ exports.downloadListedReport = (req, res) => {
     const reportRows = rows.map((row, index) => ({
       'Sr. No.': index + 1,
       'Product Name': String(row.productName || '').trim(),
+      'SKU': String(row.sku || '').trim(),
       'Listed URL': String(row.listedUrl || '').trim()
-    })).filter(row => row['Product Name'] || row['Listed URL']);
+    })).filter(row => row['Product Name'] || row['SKU'] || row['Listed URL']);
 
-    if (!reportRows.length) return res.status(400).json({ error: 'No product names or listed URLs are available for the report.' });
+    if (!reportRows.length) return res.status(400).json({ error: 'No product names, SKUs, or listed URLs are available for the report.' });
 
     const workbook = XLSX.utils.book_new();
     const worksheet = XLSX.utils.json_to_sheet(reportRows);
-    worksheet['!cols'] = [{ wch: 10 }, { wch: 70 }, { wch: 55 }];
+    worksheet['!cols'] = [{ wch: 10 }, { wch: 70 }, { wch: 24 }, { wch: 55 }];
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Listed Products');
 
     const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
