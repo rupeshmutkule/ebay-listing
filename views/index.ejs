@@ -229,6 +229,7 @@
       <input id="csvFile" type="file" accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv" aria-label="Choose Excel or CSV product file">
       <button id="btnPublishSelected">Publish Selected Live to Semi Equipment</button>
       <button id="btnViewB" class="secondary">View products on Semi Equipment Store (Seller B)</button>
+      <button id="btnDownloadReport" class="secondary" disabled>Download listed report</button>
       <button id="btnReadiness" class="secondary">Check Listing Setup</button>
     </div>
   </section>
@@ -252,8 +253,10 @@ const statusBox = document.getElementById('statusBox');
 const tableWrap = document.getElementById('tableWrap');
 const jobSummary = document.getElementById('jobSummary');
 const csvFile = document.getElementById('csvFile');
+const btnDownloadReport = document.getElementById('btnDownloadReport');
 window.productRows = [];
 window.selectedProductKeys = new Set();
+window.listedReportRows = [];
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, ch => ({
@@ -423,6 +426,34 @@ async function pollJob(jobId) {
 
 function rowKey(row) { return row.assetNumber ? `IBM-${row.assetNumber}` : `ROW-${row.rowNumber}`; }
 
+function rowTitle(row) {
+  return row.title || [row.make, row.model, row.equipmentType].filter(Boolean).join(' ') || row.assetNumber || (row.rowNumber ? `Row ${row.rowNumber}` : '');
+}
+
+function updateReportButton() {
+  btnDownloadReport.disabled = !window.listedReportRows.length;
+  btnDownloadReport.textContent = window.listedReportRows.length
+    ? `Download listed report (${window.listedReportRows.length})`
+    : 'Download listed report';
+}
+
+function addListedReportRows(results, publishedRows) {
+  const rowsBySku = new Map(publishedRows.map(row => [rowKey(row), row]));
+  const existingUrls = new Set(window.listedReportRows.map(row => row.listedUrl));
+  (results || []).filter(item => ['published', 'skipped'].includes(item.status)).forEach(item => {
+    const sourceRow = rowsBySku.get(item.sku || '');
+    const itemId = item.itemId || '';
+    const listedUrl = item.url || (itemId ? `https://www.ebay.com/itm/${encodeURIComponent(itemId)}` : '');
+    if (!listedUrl || existingUrls.has(listedUrl)) return;
+    window.listedReportRows.push({
+      productName: rowTitle(sourceRow || {}) || item.sku || itemId,
+      listedUrl
+    });
+    existingUrls.add(listedUrl);
+  });
+  updateReportButton();
+}
+
 function removeCompletedRows(results) {
   const completedKeys = new Set((results || [])
     .filter(item => ['published', 'skipped'].includes(item.status))
@@ -550,6 +581,7 @@ async function publishRowsLive(selected) {
       log(success ? `Published ${item.sku} as ${item.itemId}: ${item.url}` : `${String(item.status || 'result').toUpperCase()} ${item.sku || ''}: ${item.error || item.issues?.join('; ') || item.reason || ''}`, success ? 'ok' : 'bad');
     });
     jobSummary.textContent = `${result.published} published live · ${result.blocked} blocked · ${result.failed} failed · ${result.skipped} already listed`;
+    addListedReportRows(result.results, selected);
     const hiddenCount = removeCompletedRows(result.results);
     if (hiddenCount) log(`Hid ${hiddenCount} listed product(s) from the review table.`, 'ok');
     await loadReadiness();
@@ -562,6 +594,39 @@ document.getElementById('btnPublishSelected').onclick = () => {
 };
 
 document.getElementById('btnReadiness').onclick = loadReadiness;
+
+btnDownloadReport.onclick = async () => {
+  if (!window.listedReportRows.length) return log('No listed products are available for the report yet.', 'warn');
+  btnDownloadReport.disabled = true;
+  try {
+    const res = await fetch('/ebay-listings/listed-report', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(apiKey ? { 'X-Api-Key': apiKey } : {})
+      },
+      body: JSON.stringify({ rows: window.listedReportRows })
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `Report download failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = `listed-products-report-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(objectUrl);
+    log(`Downloaded listed products report with ${window.listedReportRows.length} product(s).`, 'ok');
+  } catch (error) {
+    log(`Report download failed: ${error.message}`, 'bad');
+  } finally {
+    updateReportButton();
+  }
+};
 
 document.getElementById('btnViewB').onclick = async () => {
   const viewButton = document.getElementById('btnViewB');

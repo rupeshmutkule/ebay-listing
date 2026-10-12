@@ -9,5 +9,6 @@ router.get('/readiness', requireApiKey, controller.readiness);
 router.post('/preview-csv', requireApiKey, parseCsvBody, controller.previewCsv);
 router.post('/preview-workbook', requireApiKey, parseWorkbookBody, controller.previewWorkbook);
 router.post('/publish-selected', requireApiKey, parseCsvBody, parseWorkbookBody, controller.publishSelectedAuthnAuth);
+router.post('/listed-report', requireApiKey, controller.downloadListedReport);
 
 module.exports = router;

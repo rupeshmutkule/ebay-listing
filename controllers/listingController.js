@@ -1,5 +1,6 @@
 const draftListings = require('../services/ibmDraftListings');
 const authnAuthListings = require('../services/ibmAuthnAuthListing');
+const XLSX = require('xlsx');
 
 exports.readiness = async (req, res) => {
   try {
@@ -124,5 +125,33 @@ exports.publishSelectedAuthnAuth = async (req, res) => {
     });
   } catch (error) {
     res.status(400).json({ error: error.message || 'Could not publish selected listings.' });
+  }
+};
+
+exports.downloadListedReport = (req, res) => {
+  try {
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!rows.length) return res.status(400).json({ error: 'No listed products are available for the report.' });
+
+    const reportRows = rows.map((row, index) => ({
+      'Sr. No.': index + 1,
+      'Product Name': String(row.productName || '').trim(),
+      'Listed URL': String(row.listedUrl || '').trim()
+    })).filter(row => row['Product Name'] || row['Listed URL']);
+
+    if (!reportRows.length) return res.status(400).json({ error: 'No product names or listed URLs are available for the report.' });
+
+    const workbook = XLSX.utils.book_new();
+    const worksheet = XLSX.utils.json_to_sheet(reportRows);
+    worksheet['!cols'] = [{ wch: 10 }, { wch: 70 }, { wch: 55 }];
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Listed Products');
+
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="listed-products-report-${stamp}.xlsx"`);
+    res.send(buffer);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Could not create the listed products report.' });
   }
 };
