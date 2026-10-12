@@ -2,6 +2,15 @@ const draftListings = require('../services/ibmDraftListings');
 const authnAuthListings = require('../services/ibmAuthnAuthListing');
 const XLSX = require('xlsx');
 
+function withAlreadyListedSummary(preview, alreadyListedCount) {
+  return {
+    ...preview,
+    alreadyListed: alreadyListedCount,
+    eligible: Math.max(0, preview.eligible - alreadyListedCount),
+    skipped: preview.skipped + alreadyListedCount
+  };
+}
+
 exports.readiness = async (req, res) => {
   try {
     res.json({ success: true, readiness: await authnAuthListings.getReadiness() });
@@ -21,7 +30,9 @@ exports.preview = async (req, res) => {
 exports.previewCsv = async (req, res) => {
   try {
     const rows = draftListings.parseCsv(req.body);
-    res.json({ success: true, preview: draftListings.previewRowsLocally(rows) });
+    const listingCheck = await authnAuthListings.markAlreadyListed(rows);
+    const preview = draftListings.previewRowsLocally(listingCheck.rows);
+    res.json({ success: true, preview: withAlreadyListedSummary(preview, listingCheck.alreadyListed.length) });
   } catch (error) {
     res.status(400).json({ error: error.response?.data || error.message });
   }
@@ -30,7 +41,9 @@ exports.previewCsv = async (req, res) => {
 exports.previewWorkbook = async (req, res) => {
   try {
     const rows = draftListings.parseWorkbookBuffer(req.body);
-    res.json({ success: true, preview: draftListings.previewRowsLocally(rows) });
+    const listingCheck = await authnAuthListings.markAlreadyListed(rows);
+    const preview = draftListings.previewRowsLocally(listingCheck.rows);
+    res.json({ success: true, preview: withAlreadyListedSummary(preview, listingCheck.alreadyListed.length) });
   } catch (error) {
     res.status(400).json({ error: error.response?.data || error.message });
   }

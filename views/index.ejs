@@ -454,6 +454,18 @@ function addListedReportRows(results, publishedRows) {
   updateReportButton();
 }
 
+function addAlreadyListedRows(rows) {
+  const results = rows
+    .filter(row => row.alreadyListed && row.listedUrl)
+    .map(row => ({
+      status: 'skipped',
+      sku: rowKey(row),
+      itemId: row.listedItemId,
+      url: row.listedUrl
+    }));
+  addListedReportRows(results, rows);
+}
+
 function removeCompletedRows(results) {
   const completedKeys = new Set((results || [])
     .filter(item => ['published', 'skipped'].includes(item.status))
@@ -476,15 +488,18 @@ function renderReviewRows(rows) {
     const key = rowKey(row);
     const title = row.title || [row.make, row.model, row.equipmentType].filter(Boolean).join(' ');
     const shipping = row.shippingAmount ?? row.spreadsheetShipping;
-    const invalid = row.issues?.length > 0 || shipping == null;
-    const status = invalid ? (shipping == null ? 'Freight excluded' : 'Needs product data') : (row.photoUrls?.length ? 'Ready to publish live' : 'Photo URL required');
+    const invalid = row.alreadyListed || row.issues?.length > 0 || shipping == null;
+    const status = row.alreadyListed ? 'Already listed' : invalid ? (shipping == null ? 'Freight excluded' : 'Needs product data') : (row.photoUrls?.length ? 'Ready to publish live' : 'Photo URL required');
+    const details = row.alreadyListed
+      ? `<a href="${escapeHtml(row.listedUrl)}" target="_blank" rel="noopener">Already listed on eBay</a><br>Matched by ${escapeHtml(row.alreadyListedMatch || 'SKU')}`
+      : escapeHtml(row.issues?.join('; ') || (row.photoUrls?.length ? 'Will be sent directly to eBay as a live listing' : 'Paste a photo URL, then publish live'));
     return `<tr>
       <td><input type="checkbox" class="product-check" data-key="${escapeHtml(key)}" ${invalid ? 'disabled' : ''} ${window.selectedProductKeys.has(key) ? 'checked' : ''}></td>
       <td>${escapeHtml(row.rowNumber ?? '')}</td><td>${escapeHtml(row.assetNumber || '')}</td><td>${escapeHtml(title)}</td>
       <td>$${escapeHtml(row.askingPrice ?? '')}</td><td>$${escapeHtml(shipping ?? '')}</td>
-      <td><textarea class="photo-urls" data-photo-key="${escapeHtml(key)}" placeholder="Paste public HTTPS photo URL(s), one per line">${escapeHtml((row.photoUrls || []).join('\n'))}</textarea><button class="publish-row secondary" data-photo-key="${escapeHtml(key)}">Publish this product live</button></td>
+      <td><textarea class="photo-urls" data-photo-key="${escapeHtml(key)}" placeholder="Paste public HTTPS photo URL(s), one per line" ${row.alreadyListed ? 'disabled' : ''}>${escapeHtml((row.photoUrls || []).join('\n'))}</textarea><button class="publish-row secondary" data-photo-key="${escapeHtml(key)}" ${row.alreadyListed ? 'disabled' : ''}>Publish this product live</button></td>
       <td>${escapeHtml(status)}${row.askingPrice > 2000 ? '<br>Best Offer enabled' : ''}</td>
-      <td>${escapeHtml(row.issues?.join('; ') || (row.photoUrls?.length ? 'Will be sent directly to eBay as a live listing' : 'Paste a photo URL, then publish live'))}</td>
+      <td>${details}</td>
     </tr>`;
   }).join('');
   tableWrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Select</th><th>Excel row</th><th>Asset #</th><th>Listing title</th><th>Price</th><th>Shipping</th><th>Photo URL(s)</th><th>Status</th><th>Details</th></tr></thead><tbody>${entries}</tbody></table></div>`;
@@ -551,12 +566,14 @@ csvFile.onchange = async () => {
     });
     window.productRows = result.preview.rows || [];
     window.selectedProductKeys = new Set();
+    addAlreadyListedRows(window.productRows);
     document.getElementById('tableTitle').textContent = 'Select products to add to Semi Equipment';
     renderReviewRows(window.productRows);
     const numeric = window.productRows.filter(row => row.shippingAmount != null).length;
     const freight = window.productRows.length - numeric;
-    jobSummary.textContent = `${window.productRows.length} products · ${numeric} with numeric shipping · ${freight} Freight/blank rows excluded`;
-    log(`Loaded ${window.productRows.length} rows. Add photo URLs to the products you want, select them, then publish live. No drafts are stored.`, 'ok');
+    const alreadyListed = window.productRows.filter(row => row.alreadyListed).length;
+    jobSummary.textContent = `${window.productRows.length} products · ${numeric} with numeric shipping · ${freight} Freight/blank rows excluded · ${alreadyListed} already listed`;
+    log(`Loaded ${window.productRows.length} rows. ${alreadyListed} already listed product(s) were found and added to the report. Add photo URLs to the remaining products you want, select them, then publish live.`, 'ok');
   } catch (error) {
     log(`Upload / validation failed: ${error.message}`, 'bad');
   }

@@ -5,6 +5,12 @@ const CATEGORY_ID = String(process.env.IBM_EBAY_CATEGORY_ID || '40004');
 const MAX_BATCH_SIZE = 1;
 
 function clean(value) { return value == null ? '' : String(value).trim(); }
+function listingTitle(row) {
+  return [row.make, row.model, row.equipmentType].map(clean).filter(Boolean).join(' ').replace(/\s+/g, ' ').slice(0, 80).trim();
+}
+function comparableTitle(value) {
+  return clean(value).toLowerCase().replace(/\s+/g, ' ').replace(/\.\.\.$/, '').trim();
+}
 function money(value) {
   const parsed = typeof value === 'number' ? value : Number(String(value ?? '').replace(/[$,]/g, '').trim());
   return Number.isFinite(parsed) ? parsed : null;
@@ -46,13 +52,44 @@ function validate(row) {
   return [...new Set(issues)];
 }
 async function findActiveSku(sku) {
+  const activeListings = await getActiveListings();
+  return activeListings.find((item) => clean(item.SKU) === sku) || null;
+}
+async function getActiveListings() {
   const first = await tradingApi.getSellerList({ type: 'authn-auth', token: sellerBAuthToken }, { pageNumber: 1, entriesPerPage: 200 });
   const all = [...first.items];
   for (let page = 2; page <= first.totalPages; page += 1) {
     const next = await tradingApi.getSellerList({ type: 'authn-auth', token: sellerBAuthToken }, { pageNumber: page, entriesPerPage: 200 });
     all.push(...next.items);
   }
-  return all.find((item) => clean(item.SKU) === sku) || null;
+  return all;
+}
+async function markAlreadyListed(rows) {
+  if (!sellerBAuthToken || !Array.isArray(rows) || !rows.length) return { rows, alreadyListed: [] };
+  const activeListings = await getActiveListings();
+  const activeBySku = new Map(activeListings.map((item) => [clean(item.SKU), item]).filter(([sku]) => sku));
+  const activeByTitle = new Map(activeListings.map((item) => [comparableTitle(item.Title), item]).filter(([title]) => title));
+  const alreadyListed = [];
+  const markedRows = rows.map((row) => {
+    const sku = row.assetNumber ? `IBM-${clean(row.assetNumber)}` : '';
+    const title = comparableTitle(row.title || listingTitle(row));
+    const skuListing = activeBySku.get(sku);
+    const titleListing = activeByTitle.get(title);
+    const listing = skuListing || titleListing;
+    if (!listing) return row;
+    const itemId = clean(listing.ItemID);
+    const listedUrl = itemId ? `https://www.ebay.com/itm/${encodeURIComponent(itemId)}` : '';
+    const marked = {
+      ...row,
+      alreadyListed: true,
+      alreadyListedMatch: skuListing ? 'SKU' : 'Listing title',
+      listedItemId: itemId,
+      listedUrl
+    };
+    alreadyListed.push(marked);
+    return marked;
+  });
+  return { rows: markedRows, alreadyListed };
 }
 let domesticFlatShippingServicesCache = { expiresAt: 0, values: [] };
 async function getDomesticFlatShippingServices() {
@@ -70,7 +107,7 @@ async function getDomesticFlatShippingServices() {
   return domesticFlatShippingServicesCache.values;
 }
 function toTradingItem(row) {
-  const title = [row.make, row.model, row.equipmentType].map(clean).filter(Boolean).join(' ').replace(/\s+/g, ' ').slice(0, 80).trim();
+  const title = listingTitle(row);
   const amount = money(row.askingPrice);
   const shipping = money(row.shippingAmount);
   const service = clean(process.env.IBM_SHIPPING_SERVICE);
@@ -178,4 +215,4 @@ async function publishSelected(rows) {
   }
   return { results, published: results.filter((r) => r.status === 'published').length, blocked: results.filter((r) => r.status === 'blocked').length, failed: results.filter((r) => r.status === 'failed').length, skipped: results.filter((r) => r.status === 'skipped').length };
 }
-module.exports = { getReadiness, publishSelected, MAX_BATCH_SIZE };
+module.exports = { getReadiness, markAlreadyListed, publishSelected, MAX_BATCH_SIZE };
