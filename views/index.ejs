@@ -439,32 +439,33 @@ function updateReportButton() {
 
 function addListedReportRows(results, publishedRows) {
   const rowsBySku = new Map(publishedRows.map(row => [rowKey(row), row]));
-  const existingUrls = new Set(window.listedReportRows.map(row => row.listedUrl));
   (results || []).filter(item => ['published', 'skipped'].includes(item.status)).forEach(item => {
     const sourceRow = rowsBySku.get(item.sku || '');
     const itemId = item.itemId || '';
     const listedUrl = item.url || (itemId ? `https://www.ebay.com/itm/${encodeURIComponent(itemId)}` : '');
-    if (!listedUrl || existingUrls.has(listedUrl)) return;
+    if (!listedUrl) return;
     window.listedReportRows.push({
       productName: rowTitle(sourceRow || {}) || item.sku || itemId,
       sku: item.sku || rowKey(sourceRow || {}),
+      rowNumber: sourceRow?.rowNumber || '',
+      assetNumber: sourceRow?.assetNumber || '',
       listedUrl
     });
-    existingUrls.add(listedUrl);
   });
   updateReportButton();
 }
 
 function addAlreadyListedRows(rows) {
-  const results = rows
-    .filter(row => row.alreadyListed && row.listedUrl)
-    .map(row => ({
-      status: 'skipped',
+  rows.filter(row => row.alreadyListed && row.listedUrl).forEach(row => {
+    window.listedReportRows.push({
+      productName: rowTitle(row),
       sku: rowKey(row),
-      itemId: row.listedItemId,
-      url: row.listedUrl
-    }));
-  addListedReportRows(results, rows);
+      rowNumber: row.rowNumber || '',
+      assetNumber: row.assetNumber || '',
+      listedUrl: row.listedUrl
+    });
+  });
+  updateReportButton();
 }
 
 function removeCompletedRows(results) {
@@ -567,6 +568,8 @@ csvFile.onchange = async () => {
     });
     window.productRows = result.preview.rows || [];
     window.selectedProductKeys = new Set();
+    window.listedReportRows = [];
+    updateReportButton();
     addAlreadyListedRows(window.productRows);
     document.getElementById('tableTitle').textContent = 'Select products to add to Semi Equipment';
     renderReviewRows(window.productRows);
