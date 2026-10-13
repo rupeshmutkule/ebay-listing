@@ -11,6 +11,10 @@ function listingTitle(row) {
 function comparableTitle(value) {
   return clean(value).toLowerCase().replace(/\s+/g, ' ').replace(/\.\.\.$/, '').trim();
 }
+function itemSpecificValue(value, maxLength = 65) {
+  const text = clean(value).replace(/\s+/g, ' ');
+  return text.length <= maxLength ? text : text.slice(0, maxLength).trim();
+}
 function money(value) {
   const parsed = typeof value === 'number' ? value : Number(String(value ?? '').replace(/[$,]/g, '').trim());
   return Number.isFinite(parsed) ? parsed : null;
@@ -129,7 +133,7 @@ function toTradingItem(row) {
       { Name: 'MPN', Value: clean(row.model) },
       { Name: 'Type', Value: clean(row.equipmentType) },
       { Name: 'Asset #', Value: clean(row.assetNumber) },
-      ...(row.configuration ? [{ Name: 'Configuration', Value: clean(row.configuration) }] : [])
+      ...(row.configuration ? [{ Name: 'Configuration', Value: itemSpecificValue(row.configuration) }] : [])
     ] },
     ShippingDetails: shippingServiceXml(service, shipping),
     ReturnPolicy: {
